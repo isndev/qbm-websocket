@@ -26,7 +26,7 @@ generateKey() noexcept {
     std::random_device rd;
     for (auto i = 0u; i < 16u; ++i)
         nonce[i] = static_cast<char>(dist(rd));
-    return crypto::Base64::encode(nonce);
+    return crypto::Base64::encode({nonce, 16});
 }
 } // namespace qb::http::ws
 

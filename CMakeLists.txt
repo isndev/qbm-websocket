@@ -21,6 +21,7 @@ if (OPENSSL_FOUND)
 qb_register_module(
         NAME websocket
         VERSION 1.0.0
+        DEPENDENCIES qbm-http
         SOURCES ws.cpp
 )
 if (QB_BUILD_TEST)
