@@ -120,6 +120,11 @@ class base : public io::async::AProtocol<_IO_> {
 
 public:
     // shared events
+    struct close {
+        const std::size_t size;
+        const char *data;
+        qb::http::ws::Message &ws;
+    };
     struct ping {
         const std::size_t size;
         const char *data;
@@ -236,8 +241,13 @@ public:
 
         // If connection close
         if ((fin_rsv_opcode & 0x0f) == 8) {
-            _message.fin_rsv_opcode = 136u;
-            this->_io << _message;
+            this->_io.out().reset();
+            if constexpr (has_method_on<_IO_, void, close>::value) {
+                this->_io.on(close{_message.size(), _message._data.cbegin(), _message});
+            } else {
+                _message.fin_rsv_opcode = 136u;
+                this->_io << _message;
+            }
             this->not_ok();
         }
         // If ping
