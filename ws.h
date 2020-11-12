@@ -24,10 +24,11 @@
 
 #include "../http/http.h"
 #include <qb/io/crypto.h>
+#include <qb/io/async/tcp/connector.h>
 #include <random>
 
 namespace qb::http::ws {
-enum opcode : unsigned char { Text = 129, Binary = 130, Close = 136 };
+enum opcode : unsigned char { Text = 129, Binary = 130, Ping = 131, Pong = 132, Close = 136 };
 
 struct Message {
     unsigned char fin_rsv_opcode = 0;
@@ -62,6 +63,18 @@ struct MessageText : public Message {
 struct MessageBinary : public Message {
     MessageBinary() {
         fin_rsv_opcode = opcode::Binary;
+    }
+};
+
+struct MessagePing : public Message {
+    MessagePing() {
+        fin_rsv_opcode = opcode::Ping;
+    }
+};
+
+struct MessagePong : public Message {
+    MessagePong() {
+        fin_rsv_opcode = opcode::Pong;
     }
 };
 
@@ -373,6 +386,120 @@ struct side<_IO_, false> {
 
 template <typename _IO_>
 using protocol = typename internal::side<_IO_>::protocol;
+
+template <typename T, typename Transport = qb::io::transport::tcp>
+class WebSocket
+        : public qb::io::async::tcp::client<WebSocket<T, Transport>, Transport>
+        , public qb::io::use<WebSocket<T, Transport>>::timeout {
+    const std::string _ws_key;
+    T &_parent;
+    qb::io::uri _remote;
+public:
+    using http_protocol = qb::http::protocol_view<WebSocket<T, Transport>>;
+    using ws_protocol = qb::http::ws::protocol<WebSocket<T, Transport>>;
+
+    // public events
+    struct sending_http_request {
+        qb::http::WebSocketRequest &request;
+    };
+    struct connected {};
+    struct error {};
+    using closed = typename ws_protocol::close;
+    using ping = typename ws_protocol::ping;
+    using pong = typename ws_protocol::pong;
+    using message = typename ws_protocol::message;
+    using disconnected = qb::io::async::event::disconnected;
+    using timeout = qb::io::async::event::timeout;
+public:
+
+    WebSocket(T &parent)
+            : _ws_key(qb::http::ws::generateKey())
+            , _parent(parent) {
+        this->setTimeout(0);
+    }
+
+    void connect(qb::io::uri const &remote) {
+        _remote = remote;
+        qb::io::async::tcp::connect<typename Transport::transport_io_type>(
+                remote,
+                [this](auto &transport) {
+                    if (!transport.is_open()) {
+                        if constexpr (has_method_on<T, void, error>::value) {
+                            _parent.on(error{});
+                        }
+                    } else {
+                        this->transport() = transport;
+                        this->template switch_protocol<http_protocol>(*this);
+                        this->start();
+
+                        qb::http::WebSocketRequest request(_ws_key);
+                        request.headers["host"].emplace_back(std::string(_remote.host()));
+                        request.path = _remote.source();
+
+                        if constexpr (has_method_on<T, void, sending_http_request>::value) {
+                            _parent.on(sending_http_request{request});
+                        }
+
+                        *this << request;
+                    }
+                });
+    }
+
+    // event io
+    void
+    on(typename http_protocol::response &&event) {
+        if (!this->template switch_protocol<ws_protocol>(*this, event.http, _ws_key)) {
+            if constexpr (has_method_on<T, void, error>::value) {
+                _parent.on(error{});
+            }
+            this->disconnect();
+            return;
+        }
+        if constexpr (has_method_on<T, void, connected>::value) {
+            _parent.on(connected{});
+        }
+    }
+
+    void
+    on(ping &&event) {
+        if constexpr (has_method_on<T, void, ping>::value) {
+            _parent.on(std::forward<ping>(event));
+        }
+    }
+
+    void
+    on(pong &&event) {
+        if constexpr (has_method_on<T, void, pong>::value) {
+            _parent.on(std::forward<pong>(event));
+        }
+    }
+
+    void
+    on(message &&event) {
+        _parent.on(std::forward<message>(event));
+    }
+
+    void
+    on(closed &&event) {
+        if constexpr (has_method_on<T, void, closed>::value) {
+            _parent.on(std::forward<closed>(event));
+        }
+    }
+
+    void
+    on(disconnected &&event) {
+        _parent.on(std::forward<disconnected>(event));
+    }
+
+    void
+    on(timeout const &event) {
+//        _parent.on(std::forward<disconnected>(event));
+    }
+
+};
+
+template <typename T>
+using WebSocketSecure = WebSocket<T, qb::io::transport::stcp>;
 
 } // namespace qb::http::ws
 
