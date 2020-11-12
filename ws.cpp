@@ -109,6 +109,18 @@ pipe<char>::put<qb::http::ws::Message>(const qb::http::ws::Message &msg) {
 
 template <>
 pipe<char> &
+pipe<char>::put<qb::http::ws::MessagePing>(const qb::http::ws::MessagePing &msg) {
+    return put(static_cast<qb::http::ws::Message const &>(msg));
+}
+
+template <>
+pipe<char> &
+pipe<char>::put<qb::http::ws::MessagePong>(const qb::http::ws::MessagePong &msg) {
+    return put(static_cast<qb::http::ws::Message const &>(msg));
+}
+
+template <>
+pipe<char> &
 pipe<char>::put<qb::http::ws::MessageText>(const qb::http::ws::MessageText &msg) {
     return put(static_cast<qb::http::ws::Message const &>(msg));
 }

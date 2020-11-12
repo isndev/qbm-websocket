@@ -28,7 +28,7 @@
 #include <random>
 
 namespace qb::http::ws {
-enum opcode : unsigned char { Text = 129, Binary = 130, Ping = 131, Pong = 132, Close = 136 };
+enum opcode : unsigned char { Text = 129, Binary = 130, Close = 136, Ping = 137, Pong = 138};
 
 struct Message {
     unsigned char fin_rsv_opcode = 0;
@@ -69,6 +69,7 @@ struct MessageBinary : public Message {
 struct MessagePing : public Message {
     MessagePing() {
         fin_rsv_opcode = opcode::Ping;
+        masked = false;
     }
 };
 
@@ -392,6 +393,7 @@ class WebSocket
         : public qb::io::async::tcp::client<WebSocket<T, Transport>, Transport>
         , public qb::io::use<WebSocket<T, Transport>>::timeout {
     const std::string _ws_key;
+    int _ping_interval;
     T &_parent;
     qb::io::uri _remote;
 public:
@@ -414,11 +416,18 @@ public:
 
     WebSocket(T &parent)
             : _ws_key(qb::http::ws::generateKey())
+            , _ping_interval(0)
             , _parent(parent) {
-        this->setTimeout(0);
+    }
+
+    void set_ping_interval(int ping_interval = 0) {
+        _ping_interval = ping_interval;
+        this->setTimeout(ping_interval);
     }
 
     void connect(qb::io::uri const &remote) {
+        this->clear_protocols();
+        this->setTimeout(0);
         _remote = remote;
         qb::io::async::tcp::connect<typename Transport::transport_io_type>(
                 remote,
@@ -457,6 +466,7 @@ public:
         }
         if constexpr (has_method_on<T, void, connected>::value) {
             _parent.on(connected{});
+            this->setTimeout(_ping_interval);
         }
     }
 
@@ -493,7 +503,9 @@ public:
 
     void
     on(timeout const &event) {
-//        _parent.on(std::forward<disconnected>(event));
+        MessagePing msg;
+        *this << msg;
+        this->setTimeout(_ping_interval);
     }
 
 };
@@ -507,6 +519,14 @@ namespace qb::allocator {
 
 template <>
 pipe<char> &pipe<char>::put<qb::http::ws::Message>(const qb::http::ws::Message &msg);
+
+template <>
+pipe<char> &
+pipe<char>::put<qb::http::ws::MessagePing>(const qb::http::ws::MessagePing &msg);
+
+template <>
+pipe<char> &
+pipe<char>::put<qb::http::ws::MessagePong>(const qb::http::ws::MessagePong &msg);
 
 template <>
 pipe<char> &
