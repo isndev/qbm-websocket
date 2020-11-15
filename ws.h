@@ -425,7 +425,7 @@ public:
         this->setTimeout(ping_interval);
     }
 
-    void connect(qb::io::uri const &remote) {
+    void connect(qb::io::uri const &remote, int timeout = 0) {
         this->clear_protocols();
         this->setTimeout(0);
         _remote = remote;
@@ -451,7 +451,7 @@ public:
 
                         *this << request;
                     }
-                });
+                }, 3);
     }
 
     // event io
