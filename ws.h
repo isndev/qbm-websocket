@@ -451,7 +451,7 @@ public:
 
                         *this << request;
                     }
-                }, 3);
+                }, timeout);
     }
 
     // event io
