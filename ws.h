@@ -443,7 +443,7 @@ public:
 
                         qb::http::WebSocketRequest request(_ws_key);
                         request.headers["host"].emplace_back(std::string(_remote.host()));
-                        request.path = _remote.source();
+                        request.url = request.path = _remote.source();
 
                         if constexpr (has_method_on<T, void, sending_http_request>::value) {
                             _parent.on(sending_http_request{request});
