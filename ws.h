@@ -125,8 +125,8 @@ namespace qb::protocol {
 
 namespace ws_internal {
 
-template <typename _IO_>
-class base : public io::async::AProtocol<_IO_> {
+template <typename IO_>
+class base : public io::async::AProtocol<IO_> {
     std::size_t _parsed = 0;
     std::size_t _expected_size = 0;
     unsigned char fin_rsv_opcode = 0;
@@ -158,8 +158,8 @@ public:
     // !shared events
 
     base() = delete;
-    base(_IO_ &io)
-        : io::async::AProtocol<_IO_>(io) {}
+    explicit base(IO_ &io)
+        : io::async::AProtocol<IO_>(io) {}
 
     std::size_t
     getMessageSize() noexcept final {
@@ -175,7 +175,7 @@ public:
             fin_rsv_opcode = first_bytes[0];
             _message.masked = (first_bytes[1] >= 128u);
             // only server side
-            if constexpr (_IO_::has_server) {
+            if constexpr (IO_::has_server) {
                 if (!_message.masked) {
                     // close if client has sent unmasked message
                     _message.reset();
@@ -220,7 +220,7 @@ public:
     }
 
     void
-    onMessage(std::size_t size) noexcept final {
+    onMessage(std::size_t) noexcept final {
         if (!this->ok())
             return;
 
@@ -248,7 +248,7 @@ public:
         }
 
         // reply in condition
-        if constexpr (_IO_::has_server)
+        if constexpr (IO_::has_server)
             _message.masked = false;
         else
             _message.masked = true;
@@ -256,7 +256,7 @@ public:
         // If connection close
         if ((fin_rsv_opcode & 0x0f) == 8) {
             this->_io.out().reset();
-            if constexpr (has_method_on<_IO_, void, close>::value) {
+            if constexpr (has_method_on<IO_, void, close>::value) {
                 this->_io.on(close{_message.size(), _message._data.cbegin(), _message});
             } else {
                 _message.fin_rsv_opcode = 136u;
@@ -266,7 +266,7 @@ public:
         }
         // If ping
         else if ((fin_rsv_opcode & 0x0f) == 9) {
-            if constexpr (has_method_on<_IO_, void, ping>::value) {
+            if constexpr (has_method_on<IO_, void, ping>::value) {
                 this->_io.on(ping{_message.size(), _message._data.cbegin(), _message});
             }
             // Send pong
@@ -275,7 +275,7 @@ public:
         }
         // If pong
         else if ((fin_rsv_opcode & 0x0f) == 10) {
-            if constexpr (has_method_on<_IO_, void, pong>::value) {
+            if constexpr (has_method_on<IO_, void, pong>::value) {
                 this->_io.on(pong{_message.size(), _message._data.cbegin(), _message});
             }
         }
@@ -301,8 +301,8 @@ public:
 
 } // namespace ws_internal
 
-template <typename _IO_>
-class ws_server : public ws_internal::base<_IO_> {
+template <typename IO_>
+class ws_server : public ws_internal::base<IO_> {
     std::string endpoint;
 
 public:
@@ -314,8 +314,8 @@ public:
 
     ws_server() = delete;
     template <typename HttpRequest>
-    ws_server(_IO_ &io, HttpRequest const &http)
-        : ws_internal::base<_IO_>(io) {
+    ws_server(IO_ &io, HttpRequest const &http)
+        : ws_internal::base<IO_>(io) {
         static auto ws_magic_string = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
         if (http.upgrade) {
             std::string ws_key(http.header("Sec-WebSocket-Key"));
@@ -327,9 +327,9 @@ public:
                 res.headers["Upgrade"].emplace_back("websocket");
                 res.headers["Connection"].emplace_back("Upgrade");
                 res.headers["Sec-WebSocket-Accept"].emplace_back(
-                    crypto::Base64::encode(crypto::sha1(ws_key)));
+                    crypto::base64::encode(crypto::sha1(ws_key)));
 
-                if constexpr (has_method_on<_IO_, void, sending_http_response>::value) {
+                if constexpr (has_method_on<IO_, void, sending_http_response>::value) {
                     this->_io.on(sending_http_response{res});
                 }
 
@@ -343,19 +343,19 @@ public:
     }
 };
 
-template <typename _IO_>
-class ws_client : public ws_internal::base<_IO_> {
+template <typename IO_>
+class ws_client : public ws_internal::base<IO_> {
 public:
     ws_client() = delete;
     template <typename HttpResponse>
-    ws_client(_IO_ &io, HttpResponse const &http, std::string const &key)
-        : ws_internal::base<_IO_>(io) {
+    ws_client(IO_ &io, HttpResponse const &http, std::string const &key)
+        : ws_internal::base<IO_>(io) {
         static const auto ws_magic_string = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
         if (http.upgrade) {
             if (http.status_code == HTTP_STATUS_SWITCHING_PROTOCOLS) {
                 const auto &res_key = http.header("Sec-WebSocket-Accept");
                 if (!res_key.empty()) {
-                    if (crypto::Base64::decode(std::string(res_key)) ==
+                    if (crypto::base64::decode(std::string(res_key)) ==
                         crypto::sha1(key + ws_magic_string)) {
                         return;
                     }
@@ -373,20 +373,20 @@ namespace qb::http::ws {
 
 namespace internal {
 
-template <typename _IO_, bool has_server = _IO_::has_server>
+template <typename IO_, bool has_server = IO_::has_server>
 struct side {
-    using protocol = qb::protocol::ws_server<_IO_>;
+    using protocol = qb::protocol::ws_server<IO_>;
 };
 
-template <typename _IO_>
-struct side<_IO_, false> {
-    using protocol = qb::protocol::ws_client<_IO_>;
+template <typename IO_>
+struct side<IO_, false> {
+    using protocol = qb::protocol::ws_client<IO_>;
 };
 
 } // namespace internal
 
-template <typename _IO_>
-using protocol = typename internal::side<_IO_>::protocol;
+template <typename IO_>
+using protocol = typename internal::side<IO_>::protocol;
 
 template <typename T, typename Transport = qb::io::transport::tcp>
 class WebSocket
@@ -414,7 +414,7 @@ public:
     using timeout = qb::io::async::event::timeout;
 public:
 
-    WebSocket(T &parent)
+    explicit WebSocket(T &parent)
             : _ws_key(qb::http::ws::generateKey())
             , _ping_interval(0)
             , _parent(parent) {

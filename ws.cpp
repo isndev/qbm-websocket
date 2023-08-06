@@ -24,9 +24,9 @@ generateKey() noexcept {
     char nonce[16] = "";
     std::uniform_int_distribution<unsigned short> dist(0, 255);
     std::random_device rd;
-    for (auto i = 0u; i < 16u; ++i)
-        nonce[i] = static_cast<char>(dist(rd));
-    return crypto::Base64::encode({nonce, 16});
+    for (char & i : nonce)
+        i = static_cast<char>(dist(rd));
+    return crypto::base64::encode({nonce, 16});
 }
 } // namespace qb::http::ws
 
@@ -93,8 +93,7 @@ fill_masked_message(pipe<char> &pipe, const qb::http::ws::Message &msg) {
     const auto msg_begin = msg._data.cbegin();
     auto out_begin = pipe.allocate_back(length);
     for (std::size_t i = 0; i < length; ++i)
-        out_begin[i] = static_cast<const char>(
-            static_cast<const unsigned char>(msg_begin[i]) ^ mask[i % 4]);
+        out_begin[i] = static_cast<char>(msg_begin[i] ^ mask[i % 4]);
 }
 
 template <>

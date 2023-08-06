@@ -15,7 +15,11 @@
 #         limitations under the License.
 #
 
-cxx_gtest(${PROJECT_NAME}-gtest-session "qb-io qbm-http qbm-websocket" test-session-websocket.cpp)
+qb_register_module_gtest(
+    NAME websocket
+    TESTNAME session
+    SOURCES test-session-websocket.cpp
+)
 
 if (OPENSSL_FOUND)
     file(COPY ${QB_SSL_RESOURCES} DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
