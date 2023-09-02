@@ -95,7 +95,7 @@ public:
     void
     sendWSHandshake() {
         qb::http::WebSocketRequest r(ws_key);
-        r.path = "/";
+        r.uri() = "localhost:9999/";
         *this << r;
     }
 
@@ -129,13 +129,13 @@ TEST(Session, WEBSOCKET_OVER_TCP) {
     msg_count_server_side = 0;
     msg_count_client_side = 0;
     TestServer server;
-    server.transport().listen_v6(60666);
+    server.transport().listen_v6(9999);
     server.start();
 
     std::thread t([]() {
         async::init();
         TestClient client;
-        if (SocketStatus::Done != client.transport().connect_v6("::1", 60666)) {
+        if (SocketStatus::Done != client.transport().connect_v6("::1", 9999)) {
             throw std::runtime_error("could not connect");
         }
         client.start();
@@ -215,7 +215,7 @@ public:
     void
     sendWSHandshake() {
         qb::http::WebSocketRequest r(ws_key);
-        r.path = "/";
+        r.uri() = "localhost:9999/";
         *this << r;
     }
 
@@ -252,13 +252,13 @@ TEST(Session, WEBSOCKET_OVER_SECURE_TCP) {
     TestSecureServer server;
     server.transport().init(
         ssl::create_server_context(SSLv23_server_method(), "cert.pem", "key.pem"));
-    server.transport().listen_v4(60666);
+    server.transport().listen_v4(9999);
     server.start();
 
     std::thread t([]() {
         async::init();
         TestSecureClient client;
-        if (SocketStatus::Done != client.transport().connect_v4("127.0.0.1", 60666)) {
+        if (SocketStatus::Done != client.transport().connect_v4("127.0.0.1", 9999)) {
             throw std::runtime_error("could not connect");
         }
         client.start();

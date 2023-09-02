@@ -110,13 +110,13 @@ std::string generateKey() noexcept;
 } // namespace qb::http::ws
 
 namespace qb::http {
-struct WebSocketRequest : public Request<> {
+struct WebSocketRequest : public Request {
     WebSocketRequest() = delete;
     explicit WebSocketRequest(std::string const &key) {
-        headers["Upgrade"].emplace_back("websocket");
-        headers["Connection"].emplace_back("Upgrade");
-        headers["Sec-WebSocket-Key"].emplace_back(key);
-        headers["Sec-WebSocket-Version"].emplace_back("13");
+        _headers["Upgrade"].emplace_back("websocket");
+        _headers["Connection"].emplace_back("Upgrade");
+        _headers["Sec-WebSocket-Key"].emplace_back(key);
+        _headers["Sec-WebSocket-Version"].emplace_back("13");
     }
 };
 } // namespace qb::http
@@ -308,7 +308,7 @@ class ws_server : public ws_internal::base<IO_> {
 public:
     // server side event
     struct sending_http_response {
-        qb::http::Response<> &response;
+        qb::http::Response &response;
     };
     // !server side event
 
@@ -324,9 +324,9 @@ public:
                 qb::http::Response res;
                 res.status_code = HTTP_STATUS_SWITCHING_PROTOCOLS;
                 res.status = "Web Socket Protocol Handshake";
-                res.headers["Upgrade"].emplace_back("websocket");
-                res.headers["Connection"].emplace_back("Upgrade");
-                res.headers["Sec-WebSocket-Accept"].emplace_back(
+                res.headers()["Upgrade"].emplace_back("websocket");
+                res.headers()["Connection"].emplace_back("Upgrade");
+                res.headers()["Sec-WebSocket-Accept"].emplace_back(
                     crypto::base64::encode(crypto::sha1(ws_key)));
 
                 if constexpr (has_method_on<IO_, void, sending_http_response>::value) {
@@ -334,7 +334,7 @@ public:
                 }
 
                 this->_io << res;
-                endpoint = http.path;
+                endpoint = http.uri().path();
                 return;
             }
             // error
@@ -442,8 +442,8 @@ public:
                         this->start();
 
                         qb::http::WebSocketRequest request(_ws_key);
-                        request.headers["host"].emplace_back(std::string(_remote.host()));
-                        request.url = request.path = _remote.source();
+                        request.headers()["host"].emplace_back(std::string(_remote.host()));
+                        request.uri() = _remote;
 
                         if constexpr (has_method_on<T, void, sending_http_request>::value) {
                             _parent.on(sending_http_request{request});

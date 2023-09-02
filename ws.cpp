@@ -139,7 +139,7 @@ pipe<char>::put<qb::http::ws::MessageClose>(const qb::http::ws::MessageClose &ms
 template <>
 pipe<char> &
 pipe<char>::put<qb::http::WebSocketRequest>(const qb::http::WebSocketRequest &msg) {
-    return put(static_cast<const qb::http::Request<> &>(msg));
+    return put(static_cast<const qb::http::Request &>(msg));
 }
 
 } // namespace qb::allocator
