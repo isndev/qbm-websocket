@@ -1,6 +1,6 @@
 /*
  * qb - C++ Actor Framework
- * Copyright (C) 2011-2021 isndev (www.qbaf.io). All rights reserved.
+ * Copyright (c) 2011-2025 qb - isndev (cpp.actor). All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,6 +13,28 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  *         limitations under the License.
+ */
+
+/**
+ * @file ws.h
+ * @brief WebSocket Protocol Implementation for QB Actor Framework
+ * 
+ * This file implements a robust WebSocket protocol client and server foundation using 
+ * the actor model of the QB framework. It provides:
+ * 
+ * - Full RFC 6455 WebSocket Protocol compliance
+ * - Secure handshake with cryptographic verification
+ * - Text and binary message support
+ * - Ping/pong heartbeat mechanism
+ * - Fragmented message handling
+ * - Automatic masking as required by the specification
+ * - Clean connection closure with status codes
+ * 
+ * The implementation builds on top of the HTTP module for initial handshake
+ * and is designed to work with the asynchronous I/O facilities of the QB framework.
+ * 
+ * @see qb::http
+ * @see qb::io::async
  */
 
 #ifndef QB_MODULE_WS_H_
@@ -28,18 +50,43 @@
 #include <random>
 
 namespace qb::http::ws {
+
+/**
+ * @brief WebSocket frame opcodes as defined in RFC 6455
+ * 
+ * These values define the type of WebSocket frame being sent or received.
+ * The highest bit (0x80) indicates whether the frame is the final fragment.
+ */
 enum opcode : unsigned char { Text = 129, Binary = 130, Close = 136, Ping = 137, Pong = 138};
 
+/**
+ * @brief Base message class for WebSocket communication
+ * 
+ * Provides functionality common to all WebSocket message types,
+ * including message content storage and frame type management.
+ */
 struct Message {
-    unsigned char fin_rsv_opcode = 0;
-    bool masked = true;
-    qb::allocator::pipe<char> _data;
+    unsigned char fin_rsv_opcode = 0; ///< Frame control byte (FIN, RSV1-3, and opcode)
+    bool masked = true; ///< Whether the message should be masked
+    qb::allocator::pipe<char> _data; ///< Message content buffer
 
+    /**
+     * @brief Get the size of the message content
+     * 
+     * @return std::size_t Size of the message data in bytes
+     */
     [[nodiscard]] std::size_t
     size() const noexcept {
         return _data.size();
     }
 
+    /**
+     * @brief Append data to the message
+     * 
+     * @tparam T Type of data to append
+     * @param data Data to add to the message
+     * @return Message& Reference to this message for chaining
+     */
     template <typename T>
     Message &
     operator<<(T const &data) {
@@ -47,6 +94,11 @@ struct Message {
         return *this;
     }
 
+    /**
+     * @brief Reset the message to its initial state
+     * 
+     * Clears the control byte and message content.
+     */
     void
     reset() {
         fin_rsv_opcode = 0;
@@ -54,49 +106,108 @@ struct Message {
     }
 };
 
+/**
+ * @brief Text message class for WebSocket
+ * 
+ * Represents a text frame (UTF-8 encoded data) in the WebSocket protocol.
+ */
 struct MessageText : public Message {
+    /**
+     * @brief Constructs a text message
+     * 
+     * Sets the opcode to Text (0x81) to indicate a text frame.
+     */
     MessageText() {
         fin_rsv_opcode = opcode::Text;
     }
 };
 
+/**
+ * @brief Binary message class for WebSocket
+ * 
+ * Represents a binary frame in the WebSocket protocol.
+ */
 struct MessageBinary : public Message {
+    /**
+     * @brief Constructs a binary message
+     * 
+     * Sets the opcode to Binary (0x82) to indicate a binary frame.
+     */
     MessageBinary() {
         fin_rsv_opcode = opcode::Binary;
     }
 };
 
+/**
+ * @brief Ping message class for WebSocket
+ * 
+ * Used for WebSocket connection heartbeat and liveness checks.
+ * According to the specification, a peer receiving a ping must respond with a pong.
+ */
 struct MessagePing : public Message {
+    /**
+     * @brief Constructs a ping message
+     * 
+     * Sets the opcode to Ping (0x89) and disables masking for server-originated pings.
+     */
     MessagePing() {
         fin_rsv_opcode = opcode::Ping;
         masked = false;
     }
 };
 
+/**
+ * @brief Pong message class for WebSocket
+ * 
+ * Used as a response to ping messages for connection liveness verification.
+ */
 struct MessagePong : public Message {
+    /**
+     * @brief Constructs a pong message
+     * 
+     * Sets the opcode to Pong (0x8A) to indicate a pong response.
+     */
     MessagePong() {
         fin_rsv_opcode = opcode::Pong;
     }
 };
 
+/**
+ * @brief Close status codes as defined in RFC 6455
+ * 
+ * These status codes indicate the reason for WebSocket connection closure.
+ */
 enum CloseStatus : int {
-    Normal = 1000,
-    GoingAway = 1001,
-    ProtocolError = 1002,
-    DataNotAccepted = 1003,
-    zReserved1 = 1004,
-    zReserved2 = 1005,
-    zReserved3 = 1006,
-    DataNotConsistent = 1007,
-    PolicyViolation = 1008,
-    MessageTooBig = 1009,
-    MissingExtension = 1010,
-    UnexpectedReason = 1011,
-    zReserved4 = 1012
+    Normal = 1000,            ///< Normal closure; the connection successfully completed whatever purpose it was created for
+    GoingAway = 1001,         ///< Server/client is going away (e.g., server shutting down, browser navigating away)
+    ProtocolError = 1002,     ///< Protocol error, terminating the connection
+    DataNotAccepted = 1003,   ///< Received data of a type not accepted (e.g., binary vs text)
+    zReserved1 = 1004,        ///< Reserved status code
+    zReserved2 = 1005,        ///< Reserved status code - MUST NOT be set explicitly
+    zReserved3 = 1006,        ///< Reserved status code - MUST NOT be set explicitly
+    DataNotConsistent = 1007, ///< Message data is inconsistent (e.g., non-UTF-8 data in a text message)
+    PolicyViolation = 1008,   ///< Message received violates policy
+    MessageTooBig = 1009,     ///< Message too large to process
+    MissingExtension = 1010,  ///< Client expected server to negotiate extensions but server didn't
+    UnexpectedReason = 1011,  ///< Server encountered an unexpected condition preventing request fulfillment
+    zReserved4 = 1012         ///< Reserved status code
 };
 
+/**
+ * @brief Close message class for WebSocket
+ * 
+ * Used to initiate or confirm a WebSocket connection closure.
+ * Includes a status code and optional reason text.
+ */
 struct MessageClose : Message {
     MessageClose() = delete;
+    
+    /**
+     * @brief Constructs a close message with status and reason
+     * 
+     * @param status WebSocket close status code
+     * @param reason Text description of the closure reason
+     */
     explicit MessageClose(int status = CloseStatus::Normal,
                           std::string const &reason = "closed normally") {
         fin_rsv_opcode = opcode::Close;
@@ -105,13 +216,33 @@ struct MessageClose : Message {
     }
 };
 
+/**
+ * @brief Generate a cryptographically secure key for WebSocket handshake
+ * 
+ * Creates a Base64-encoded secure random key for establishing WebSocket connections.
+ * 
+ * @return std::string The generated WebSocket key
+ */
 std::string generateKey() noexcept;
 
 } // namespace qb::http::ws
 
 namespace qb::http {
+
+/**
+ * @brief HTTP request specialized for WebSocket upgrade
+ * 
+ * Extends the base HTTP request to include the headers necessary for
+ * initiating a WebSocket connection according to RFC 6455.
+ */
 struct WebSocketRequest : public Request<> {
     WebSocketRequest() = delete;
+    
+    /**
+     * @brief Constructs a WebSocket upgrade request
+     * 
+     * @param key The WebSocket key to use for the handshake
+     */
     explicit WebSocketRequest(std::string const &key) {
         headers["Upgrade"].emplace_back("websocket");
         headers["Connection"].emplace_back("Upgrade");
@@ -125,6 +256,14 @@ namespace qb::protocol {
 
 namespace ws_internal {
 
+/**
+ * @brief Base protocol implementation for WebSocket
+ * 
+ * Handles WebSocket frame parsing, message assembly, and protocol
+ * state management according to RFC 6455.
+ * 
+ * @tparam IO_ I/O handler type
+ */
 template <typename IO_>
 class base : public io::async::AProtocol<IO_> {
     std::size_t _parsed = 0;
@@ -134,22 +273,44 @@ class base : public io::async::AProtocol<IO_> {
 
 public:
     // shared events
+    /**
+     * @brief Close event structure
+     * 
+     * Passed to handlers when a WebSocket close frame is received.
+     */
     struct close {
         const std::size_t size;
         const char *data;
         qb::http::ws::Message &ws;
     };
+    
+    /**
+     * @brief Ping event structure
+     * 
+     * Passed to handlers when a WebSocket ping frame is received.
+     */
     struct ping {
         const std::size_t size;
         const char *data;
         qb::http::ws::Message &ws;
     };
+    
+    /**
+     * @brief Pong event structure
+     * 
+     * Passed to handlers when a WebSocket pong frame is received.
+     */
     struct pong {
         const std::size_t size;
         const char *data;
         qb::http::ws::Message &ws;
     };
 
+    /**
+     * @brief Message event structure
+     * 
+     * Passed to handlers when a WebSocket data frame (text or binary) is received.
+     */
     struct message {
         const std::size_t size;
         const char *data;
@@ -158,9 +319,23 @@ public:
     // !shared events
 
     base() = delete;
+    
+    /**
+     * @brief Constructs a WebSocket protocol handler
+     * 
+     * @param io Reference to the I/O handler
+     */
     explicit base(IO_ &io)
         : io::async::AProtocol<IO_>(io) {}
 
+    /**
+     * @brief Calculate the size of a complete WebSocket message
+     * 
+     * Parses WebSocket frame headers to determine the total message size.
+     * Handles various payload length formats and masking.
+     * 
+     * @return std::size_t Size of the complete message, or 0 if incomplete
+     */
     std::size_t
     getMessageSize() noexcept final {
         if (!this->ok())
@@ -301,18 +476,41 @@ public:
 
 } // namespace ws_internal
 
+/**
+ * @brief WebSocket server protocol implementation
+ * 
+ * Handles server-side behavior during WebSocket connection establishment
+ * and communication according to RFC 6455.
+ * 
+ * @tparam IO_ I/O handler type
+ */
 template <typename IO_>
 class ws_server : public ws_internal::base<IO_> {
     std::string endpoint;
 
 public:
-    // server side event
+    /**
+     * @brief HTTP response sending event
+     * 
+     * Passed to handlers before sending the WebSocket upgrade response.
+     * Allows customization of the response.
+     */
     struct sending_http_response {
         qb::http::Response<> &response;
     };
-    // !server side event
 
     ws_server() = delete;
+    
+    /**
+     * @brief Constructs a WebSocket server protocol handler
+     * 
+     * Processes the upgrade request and sends the appropriate response
+     * with the calculated accept key according to RFC 6455.
+     * 
+     * @tparam HttpRequest Type of HTTP request
+     * @param io Reference to the I/O handler
+     * @param http HTTP request containing the WebSocket upgrade request
+     */
     template <typename HttpRequest>
     ws_server(IO_ &io, HttpRequest const &http)
         : ws_internal::base<IO_>(io) {
@@ -343,10 +541,30 @@ public:
     }
 };
 
+/**
+ * @brief WebSocket client protocol implementation
+ * 
+ * Handles client-side behavior during WebSocket connection establishment
+ * and communication according to RFC 6455.
+ * 
+ * @tparam IO_ I/O handler type
+ */
 template <typename IO_>
 class ws_client : public ws_internal::base<IO_> {
 public:
     ws_client() = delete;
+    
+    /**
+     * @brief Constructs a WebSocket client protocol handler
+     * 
+     * Verifies the server's handshake response by checking the accept key
+     * according to RFC 6455.
+     * 
+     * @tparam HttpResponse Type of HTTP response
+     * @param io Reference to the I/O handler
+     * @param http HTTP response from the server
+     * @param key Original client key sent in the upgrade request
+     */
     template <typename HttpResponse>
     ws_client(IO_ &io, HttpResponse const &http, std::string const &key)
         : ws_internal::base<IO_>(io) {
@@ -388,6 +606,15 @@ struct side<IO_, false> {
 template <typename IO_>
 using protocol = typename internal::side<IO_>::protocol;
 
+/**
+ * @brief WebSocket client connection class
+ * 
+ * Provides a complete client WebSocket implementation that handles connection,
+ * protocol switching, message transmission, and heartbeat monitoring.
+ * 
+ * @tparam T Parent handler type that will receive WebSocket events
+ * @tparam Transport Transport layer type (TCP or SSL)
+ */
 template <typename T, typename Transport = qb::io::transport::tcp>
 class WebSocket
         : public qb::io::async::tcp::client<WebSocket<T, Transport>, Transport>
@@ -401,11 +628,31 @@ public:
     using ws_protocol = qb::http::ws::protocol<WebSocket<T, Transport>>;
 
     // public events
+    /**
+     * @brief HTTP request sending event
+     * 
+     * Passed to handlers before sending the WebSocket upgrade request.
+     * Allows customization of the request.
+     */
     struct sending_http_request {
         qb::http::WebSocketRequest &request;
     };
+    
+    /**
+     * @brief Connection successful event
+     * 
+     * Signaled when the WebSocket connection is successfully established.
+     */
     struct connected {};
+    
+    /**
+     * @brief Connection error event
+     * 
+     * Signaled when an error occurs during connection establishment.
+     */
     struct error {};
+    
+    // Re-export event types from the protocol
     using closed = typename ws_protocol::close;
     using ping = typename ws_protocol::ping;
     using pong = typename ws_protocol::pong;
@@ -414,17 +661,42 @@ public:
     using timeout = qb::io::async::event::timeout;
 public:
 
+    /**
+     * @brief Constructs a WebSocket client
+     * 
+     * Initializes the WebSocket client with a parent handler that will
+     * receive the WebSocket events.
+     * 
+     * @param parent Reference to the parent handler
+     */
     explicit WebSocket(T &parent)
             : _ws_key(qb::http::ws::generateKey())
             , _ping_interval(0)
             , _parent(parent) {
     }
 
+    /**
+     * @brief Set the ping interval for heartbeat
+     * 
+     * Configures the WebSocket to automatically send ping frames at the specified interval
+     * to keep the connection alive and detect disconnections.
+     * 
+     * @param ping_interval Interval in milliseconds (0 to disable)
+     */
     void set_ping_interval(int ping_interval = 0) {
         _ping_interval = ping_interval;
         this->setTimeout(ping_interval);
     }
 
+    /**
+     * @brief Connect to a WebSocket server
+     * 
+     * Initiates a WebSocket connection to the specified URI by first establishing
+     * a TCP connection and then performing the WebSocket handshake.
+     * 
+     * @param remote URI of the WebSocket server
+     * @param timeout Connection timeout in milliseconds (0 for no timeout)
+     */
     void connect(qb::io::uri const &remote, int timeout = 0) {
         this->clear_protocols();
         this->setTimeout(0);
@@ -454,7 +726,14 @@ public:
                 }, timeout);
     }
 
-    // event io
+    /**
+     * @brief Handle HTTP response event
+     * 
+     * Called when the HTTP handshake response is received from the server.
+     * Validates the response and completes the WebSocket connection establishment.
+     * 
+     * @param event HTTP response event containing the server's handshake response
+     */
     void
     on(typename http_protocol::response &&event) {
         if (!this->template switch_protocol<ws_protocol>(*this, event.http, _ws_key)) {
@@ -470,6 +749,14 @@ public:
         }
     }
 
+    /**
+     * @brief Handle ping event
+     * 
+     * Called when a ping frame is received from the server.
+     * Forwards the event to the parent handler if it has a matching handler.
+     * 
+     * @param event Ping event containing the ping data
+     */
     void
     on(ping &&event) {
         if constexpr (has_method_on<T, void, ping>::value) {
@@ -477,6 +764,14 @@ public:
         }
     }
 
+    /**
+     * @brief Handle pong event
+     * 
+     * Called when a pong frame is received from the server.
+     * Forwards the event to the parent handler if it has a matching handler.
+     * 
+     * @param event Pong event containing the pong data
+     */
     void
     on(pong &&event) {
         if constexpr (has_method_on<T, void, pong>::value) {
@@ -484,11 +779,27 @@ public:
         }
     }
 
+    /**
+     * @brief Handle message event
+     * 
+     * Called when a data frame (text or binary) is received from the server.
+     * Forwards the event to the parent handler.
+     * 
+     * @param event Message event containing the received data
+     */
     void
     on(message &&event) {
         _parent.on(std::forward<message>(event));
     }
 
+    /**
+     * @brief Handle close event
+     * 
+     * Called when a close frame is received from the server.
+     * Forwards the event to the parent handler if it has a matching handler.
+     * 
+     * @param event Close event containing the close status and reason
+     */
     void
     on(closed &&event) {
         if constexpr (has_method_on<T, void, closed>::value) {
@@ -496,11 +807,27 @@ public:
         }
     }
 
+    /**
+     * @brief Handle disconnection event
+     * 
+     * Called when the underlying transport connection is closed.
+     * Forwards the event to the parent handler.
+     * 
+     * @param event Disconnection event containing the reason for disconnection
+     */
     void
     on(disconnected &&event) {
         _parent.on(std::forward<disconnected>(event));
     }
 
+    /**
+     * @brief Handle timeout event
+     * 
+     * Called when the ping interval timer expires.
+     * Sends a ping frame to the server and resets the timer.
+     * 
+     * @param event Timeout event
+     */
     void
     on(timeout const &event) {
         MessagePing msg;
@@ -510,6 +837,13 @@ public:
 
 };
 
+/**
+ * @brief Secure WebSocket client connection class
+ * 
+ * Type alias for WebSocket using SSL/TLS transport for secure connections.
+ * 
+ * @tparam T Parent handler type that will receive WebSocket events
+ */
 template <typename T>
 using WebSocketSecure = WebSocket<T, qb::io::transport::stcp>;
 
