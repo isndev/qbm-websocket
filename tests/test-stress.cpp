@@ -47,19 +47,12 @@
  * They are configured to create significant load while remaining efficient for
  * automated testing.
  */
-constexpr const std::size_t STRESS_ITERATIONS =
-    100; // Number of iterations for iterative tests
-constexpr const std::size_t MAX_CONNECTIONS =
-    20; // Maximum number of concurrent connections
+
 constexpr const std::size_t MESSAGE_SIZE_SMALL  = 128;   // Small message size in bytes
 constexpr const std::size_t MESSAGE_SIZE_MEDIUM = 2048;  // Medium message size in bytes
 constexpr const std::size_t MESSAGE_SIZE_LARGE  = 16384; // Large message size in bytes
 constexpr const int         MAX_TEST_SECONDS =
     30; // Maximum test duration in seconds (increased from 10)
-constexpr const int STRESS_TEST_DURATION_SEC = 5; // Duration for generic stress tests
-constexpr const int MAX_MESSAGE_SIZE    = 8192;   // Upper limit for random message sizes
-constexpr const int CLIENTS_COUNT       = 15;     // Default number of clients for tests
-constexpr const int MESSAGES_PER_CLIENT = 50;     // Default messages per client
 
 /**
  * @brief Global variables for test synchronization and statistics
@@ -1052,7 +1045,7 @@ TEST(Stress, LONG_LIVED_CONNECTIONS) {
 
     // Create and start client threads
     for (int i = 0; i < num_clients; ++i) {
-        threads.emplace_back([i, ping_interval_ms, &ping_pong_count, &test_running]() {
+        threads.emplace_back([i, &ping_pong_count, &test_running]() {
             qb::io::async::init();
 
             // Wait for server to be ready

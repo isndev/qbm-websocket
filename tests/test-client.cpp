@@ -36,7 +36,6 @@ using namespace qb::io;
 // Test configuration constants
 constexpr const std::size_t MESSAGE_COUNT    = 100;
 constexpr const char        TEST_MESSAGE[]   = "Test message from client";
-constexpr const int         PING_INTERVAL_MS = 500;
 
 // Test synchronization variables
 std::atomic<std::size_t> messages_received{0};

@@ -58,11 +58,8 @@ using namespace qb::io;
  * - CONCURRENT_CLIENTS: Number of simultaneous client connections
  * - PING_INTERVAL_MS: Time between ping/pong health checks
  */
-constexpr const std::size_t STRESS_TEST_ITERATIONS = 1000;
 constexpr const std::size_t LARGE_MESSAGE_SIZE =
     1024 * 16; // 16KB for more robust testing
-constexpr const std::size_t CONCURRENT_CLIENTS = 5;
-constexpr const int         PING_INTERVAL_MS   = 100;
 
 /**
  * @brief Global state variables for test synchronization and metrics

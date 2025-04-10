@@ -804,7 +804,7 @@ public:
      * This is used for the ping/pong keepalive mechanism.
      */
     void
-    on(timeout const &event) {
+    on(timeout const &) {
         MessagePing msg;
         *this << msg;
         this->setTimeout(_ping_interval);
