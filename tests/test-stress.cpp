@@ -924,6 +924,8 @@ TEST(Stress, HIGH_VOLUME) {
  * This test verifies the server's ability to handle clients that
  * connect and disconnect rapidly, simulating connection churn.
  */
+// Use fewer iterations for this test to keep it fast
+constexpr int num_iterations = 100; // Number of connect/disconnect cycles per thread
 TEST(Stress, RAPID_CONNECTIONS) {
     reset_test_state();
 
@@ -940,8 +942,6 @@ TEST(Stress, RAPID_CONNECTIONS) {
     std::atomic<std::size_t> disconnected_count{0};
     std::atomic<bool>        test_running{true};
 
-    // Use fewer iterations for this test to keep it fast
-    const int num_iterations = 10; // Number of connect/disconnect cycles per thread
     std::vector<std::thread> threads;
 
     // Create and start client threads
@@ -1022,6 +1022,11 @@ TEST(Stress, RAPID_CONNECTIONS) {
  * This test verifies the server's ability to maintain long-lived
  * connections and correctly handle ping/pong control frames.
  */
+// Parameters for a real stress test
+constexpr int num_clients            = 5;    // Number of concurrent clients
+constexpr int ping_interval_ms       = 50;   // Send ping every 50ms
+constexpr int connection_duration_ms = 1000; // Each connection lasts 1 second
+constexpr int max_test_duration_ms   = 2000; // Maximum test duration
 TEST(Stress, LONG_LIVED_CONNECTIONS) {
     reset_test_state();
 
@@ -1032,12 +1037,6 @@ TEST(Stress, LONG_LIVED_CONNECTIONS) {
     server.signal_ready();
 
     std::cout << "Server started for LONG_LIVED_CONNECTIONS test" << std::endl;
-
-    // Parameters for a real stress test
-    const int num_clients            = 5;    // Number of concurrent clients
-    const int ping_interval_ms       = 50;   // Send ping every 50ms
-    const int connection_duration_ms = 1000; // Each connection lasts 1 second
-    const int max_test_duration_ms   = 2000; // Maximum test duration
 
     std::atomic<int>         ping_pong_count{0}; // Count of ping/pong exchanges
     std::atomic<bool>        test_running{true}; // Test running flag

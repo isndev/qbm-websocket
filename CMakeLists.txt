@@ -15,23 +15,25 @@
 #         limitations under the License.
 #
 
-cmake_minimum_required(VERSION 3.10)
 project(qbm-websocket)
 
-# Force OpenSSL to be enabled
-set(QB_IO_WITH_SSL ON CACHE BOOL "Enable SSL support" FORCE)
-set(OPENSSL_FOUND TRUE CACHE BOOL "Force OpenSSL to be found" FORCE)
+if (NOT QB_FOUND)
+    message(STATUS "qb project not found, skipping Websocket module")
+    return()
+endif ()
 
-if (OPENSSL_FOUND)
-    qb_register_module(
-            NAME websocket
-            VERSION 1.0.0
-            DEPENDENCIES qbm-http
-            SOURCES ws.cpp
-    )
-    if (QB_BUILD_TEST)
-        add_subdirectory(tests)
-    endif ()
-else ()
+if (NOT OPENSSL_FOUND OR NOT QB_IO_WITH_SSL)
     message(INFO: qbm-websocket will not be loaded, missing openssl)
+    return()
+endif ()
+
+qb_register_module(
+        NAME websocket
+        VERSION 1.0.0
+        DEPENDENCIES qbm-http
+        SOURCES ws.cpp
+)
+
+if (QB_BUILD_TEST)
+    add_subdirectory(tests)
 endif ()

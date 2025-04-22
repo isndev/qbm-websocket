@@ -545,7 +545,7 @@ public:
         static const auto ws_magic_string = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
         if (http.upgrade) {
             if (http.status_code == HTTP_STATUS_SWITCHING_PROTOCOLS) {
-                const auto &res_key = http.header("Sec-WebSocket-Accept");
+                const auto res_key = http.header("Sec-WebSocket-Accept");
                 if (!res_key.empty()) {
                     if (crypto::base64::decode(std::string(res_key)) ==
                         crypto::sha1(key + ws_magic_string)) {
