@@ -35,5 +35,6 @@ qb_register_module(
 )
 
 if (QB_BUILD_TEST)
+    enable_testing()
     add_subdirectory(tests)
 endif ()
