@@ -260,6 +260,7 @@ struct WebSocketRequest : public Request {
      * @param key The WebSocket key for the handshake
      */
     explicit WebSocketRequest(std::string const &key) {
+        method() = qb::http::Method::GET;
         _headers["Upgrade"].emplace_back("websocket");
         _headers["Connection"].emplace_back("Upgrade");
         _headers["Sec-WebSocket-Key"].emplace_back(key);
@@ -514,8 +515,7 @@ public:
             if (!ws_key.empty()) {
                 ws_key += ws_magic_string;
                 qb::http::Response res;
-                res.status_code = HTTP_STATUS_SWITCHING_PROTOCOLS;
-                res.status      = "Web Socket Protocol Handshake";
+                res.status() = qb::http::status::SWITCHING_PROTOCOLS;
                 res.headers()["Upgrade"].emplace_back("websocket");
                 res.headers()["Connection"].emplace_back("Upgrade");
                 res.headers()["Sec-WebSocket-Accept"].emplace_back(
@@ -544,7 +544,7 @@ public:
         : ws_internal::base<IO_>(io) {
         static const auto ws_magic_string = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
         if (http.upgrade) {
-            if (http.status_code == HTTP_STATUS_SWITCHING_PROTOCOLS) {
+            if (http.status() == qb::http::status::SWITCHING_PROTOCOLS) {
                 const auto res_key = http.header("Sec-WebSocket-Accept");
                 if (!res_key.empty()) {
                     if (crypto::base64::decode(std::string(res_key)) ==

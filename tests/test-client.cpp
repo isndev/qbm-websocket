@@ -92,10 +92,10 @@ public:
      * @brief Handle HTTP request for WebSocket upgrade
      */
     void
-    on(Protocol::request &&event) {
+    on(Protocol::request &&request) {
         std::cout << "Server received WebSocket upgrade request" << std::endl;
 
-        if (!this->switch_protocol<WS_Protocol>(*this, event.http)) {
+        if (!this->switch_protocol<WS_Protocol>(*this, request)) {
             std::cerr << "Failed to switch to WebSocket protocol" << std::endl;
             disconnect();
         } else {
@@ -199,10 +199,10 @@ public:
      * @brief Handle HTTP response to handshake request
      */
     void
-    on(Protocol::response &&event) {
-        std::cout << "Received HTTP response: " << event.http.status_code << std::endl;
+    on(Protocol::response &&response) {
+        std::cout << "Received HTTP response: " << response.status() << std::endl;
 
-        if (!this->switch_protocol<WS_Protocol>(*this, event.http, ws_key)) {
+        if (!this->switch_protocol<WS_Protocol>(*this, response, ws_key)) {
             std::cerr << "Failed to switch to WebSocket protocol" << std::endl;
             disconnect();
         } else {

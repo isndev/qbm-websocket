@@ -220,10 +220,10 @@ public:
      * switching the connection to the WebSocket protocol if valid.
      */
     void
-    on(typename Protocol::request &&event) {
+    on(typename Protocol::request &&request) {
         std::cout << "Server received client request, switching to WebSocket protocol..."
                   << std::endl;
-        if (!this->switch_protocol<WS_Protocol>(*this, event.http)) {
+        if (!this->switch_protocol<WS_Protocol>(*this, request)) {
             std::cout << "Server failed to switch protocols" << std::endl;
             ++protocol_errors;
             disconnect();
@@ -523,12 +523,12 @@ public:
      * and if successful, switches to the WebSocket protocol and begins sending messages.
      */
     void
-    on(typename Protocol::response &&event) {
+    on(typename Protocol::response &&response) {
         std::cout << "Client " << _client_id
-                  << " received HTTP response, status=" << event.http.status_code
+                  << " received HTTP response, status=" << response.status()
                   << std::endl;
 
-        if (!this->switch_protocol<WS_Protocol>(*this, event.http, _ws_key)) {
+        if (!this->switch_protocol<WS_Protocol>(*this, response, _ws_key)) {
             std::cout << "Client " << _client_id << " failed to switch protocols"
                       << std::endl;
             ++protocol_errors;

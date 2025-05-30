@@ -94,8 +94,8 @@ public:
      * @param event The HTTP request containing WebSocket upgrade headers
      */
     void
-    on(Protocol::request &&event) {
-        if (!this->switch_protocol<WS_Protocol>(*this, event.http))
+    on(Protocol::request &&request) {
+        if (!this->switch_protocol<WS_Protocol>(*this, request))
             disconnect();
         else
             ++msg_count_server_side;
@@ -206,8 +206,8 @@ public:
      * @param event The HTTP response containing WebSocket handshake confirmation
      */
     void
-    on(Protocol::response &&event) {
-        if (!this->switch_protocol<WS_Protocol>(*this, event.http, ws_key))
+    on(Protocol::response &&response) {
+        if (!this->switch_protocol<WS_Protocol>(*this, response, ws_key))
             disconnect();
         else {
             for (auto i = 0u; i < NB_ITERATION; ++i) {
@@ -313,8 +313,8 @@ public:
      * @param event The HTTP request containing WebSocket upgrade headers
      */
     void
-    on(Protocol::request &&event) {
-        if (!this->switch_protocol<WS_Protocol>(*this, event.http))
+    on(Protocol::request &&request) {
+        if (!this->switch_protocol<WS_Protocol>(*this, request))
             disconnect();
         else
             ++msg_count_server_side;
@@ -416,8 +416,8 @@ public:
      * @param event The HTTP response containing WebSocket handshake confirmation
      */
     void
-    on(Protocol::response &&event) {
-        if (!this->switch_protocol<WS_Protocol>(*this, event.http, ws_key))
+    on(Protocol::response &&response) {
+        if (!this->switch_protocol<WS_Protocol>(*this, response, ws_key))
             disconnect();
         else {
             for (auto i = 0u; i < NB_ITERATION; ++i) {

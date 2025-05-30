@@ -196,8 +196,8 @@ public:
      * @param event HTTP request event containing handshake information
      */
     void
-    on(typename Protocol::request &&event) {
-        if (!this->switch_protocol<WS_Protocol>(*this, event.http)) {
+    on(typename Protocol::request &&request) {
+        if (!this->switch_protocol<WS_Protocol>(*this, request)) {
             disconnect();
         } else {
             // Send a ping on successful connection to test client handling
@@ -461,8 +461,8 @@ public:
      * @param event HTTP response event
      */
     void
-    on(Protocol::response &&event) {
-        if (!this->switch_protocol<WS_Protocol>(*this, event.http, ws_key)) {
+    on(Protocol::response &&response) {
+        if (!this->switch_protocol<WS_Protocol>(*this, response, ws_key)) {
             disconnect();
             current_state_ = Disconnected;
         } else {
@@ -968,13 +968,13 @@ public:
      * @param event HTTP response event
      */
     void
-    on(Protocol::response &&event) {
+    on(Protocol::response &&response) {
         std::cout << "DebugClient: Received HTTP response, status="
-                  << event.http.status_code << std::endl;
+                  << response.status() << std::endl;
 
         // Afficher les entêtes de la réponse pour le débogage
         std::cout << "Response headers:" << std::endl;
-        for (const auto &header : event.http.headers()) {
+        for (const auto &header : response.headers()) {
             std::cout << "  " << header.first << ": ";
             for (const auto &value : header.second) {
                 std::cout << value << " ";
@@ -982,7 +982,7 @@ public:
             std::cout << std::endl;
         }
 
-        if (!this->switch_protocol<WS_Protocol>(*this, event.http, ws_key)) {
+        if (!this->switch_protocol<WS_Protocol>(*this, response, ws_key)) {
             std::cout << "DebugClient: Failed to switch to WebSocket protocol"
                       << std::endl;
             current_state_ = Disconnected;

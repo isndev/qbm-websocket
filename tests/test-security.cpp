@@ -88,23 +88,23 @@ public:
      * - Verifies proper upgrade and connection headers
      */
     void
-    on(typename Protocol::request &&event) {
+    on(typename Protocol::request &&request) {
         // Check security headers and requirements
         bool valid = true;
 
         // Check WebSocket version
-        if (event.http.header("Sec-WebSocket-Version") != "13") {
+        if (request.header("Sec-WebSocket-Version") != "13") {
             valid = false;
         }
 
         // Check required headers
-        if (event.http.header("Sec-WebSocket-Key").empty()) {
+        if (request.header("Sec-WebSocket-Key").empty()) {
             valid = false;
         }
 
         // Check for upgrade header
-        if (!event.http.upgrade || event.http.header("Upgrade") != "websocket" ||
-            event.http.header("Connection").find("Upgrade") == std::string::npos) {
+        if (!request.upgrade || request.header("Upgrade") != "websocket" ||
+            request.header("Connection").find("Upgrade") == std::string::npos) {
             valid = false;
         }
 
@@ -113,7 +113,7 @@ public:
 
         if (valid) {
             _validated = true;
-            if (!this->switch_protocol<WS_Protocol>(*this, event.http)) {
+            if (!this->switch_protocol<WS_Protocol>(*this, request)) {
                 ++rejection_count;
                 disconnect();
             } else {
@@ -122,8 +122,7 @@ public:
         } else {
             // Return 400 Bad Request for invalid requests
             qb::http::Response res;
-            res.status_code = HTTP_STATUS_BAD_REQUEST;
-            res.status      = "Bad Request";
+            res.status() = qb::http::status::BAD_REQUEST;
             res.body()      = "Invalid WebSocket request";
             *this << res;
             ++rejection_count;
@@ -226,7 +225,7 @@ public:
         : qb::io::use<ValidClient>::tcp::client<>()
         , _ws_key(qb::http::ws::generateKey()) {
         // Set a timeout for the connection
-        this->setTimeout(5000); // 5 second timeout for valid connections
+        this->setTimeout(5); // 5 second timeout for valid connections
     }
 
     /**
@@ -246,10 +245,10 @@ public:
      * Sends a test message if handshake was successful.
      */
     void
-    on(typename Protocol::response &&event) {
-        if (event.http.status_code != HTTP_STATUS_SWITCHING_PROTOCOLS) {
+    on(typename Protocol::response &&response) {
+        if (response.status() != qb::http::status::SWITCHING_PROTOCOLS) {
             ++rejection_count;
-        } else if (!this->switch_protocol<WS_Protocol>(*this, event.http, _ws_key)) {
+        } else if (!this->switch_protocol<WS_Protocol>(*this, response, _ws_key)) {
             ++rejection_count;
         } else {
             // Connection established - send a simple message
@@ -303,7 +302,7 @@ public:
     InvalidKeyClient()
         : qb::io::use<InvalidKeyClient>::tcp::client<>() {
         // Set a timeout for the connection
-        this->setTimeout(2000); // 2 second timeout
+        this->setTimeout(2); // 2 second timeout
     }
 
     /**
@@ -317,7 +316,7 @@ public:
                   << std::endl;
         // Create a custom request with missing WebSocket key
         qb::http::Request r;
-        r.method        = HTTP_GET;
+        r.method()        = HTTP_GET;
         r.uri()         = "localhost:9995/";
         r.major_version = 1;
         r.minor_version = 1;
@@ -340,11 +339,11 @@ public:
      * Expects a 400 Bad Request response for the invalid handshake.
      */
     void
-    on(typename Protocol::response &&event) {
+    on(typename Protocol::response &&response) {
         std::cout << "InvalidKeyClient: Received response with status "
-                  << event.http.status_code << std::endl;
+                  << response.status() << std::endl;
         // Should be rejected
-        if (event.http.status_code == HTTP_STATUS_BAD_REQUEST) {
+        if (response.status() == qb::http::status::BAD_REQUEST) {
             std::cout
                 << "InvalidKeyClient: Bad request detected, incrementing rejection count"
                 << std::endl;
@@ -399,7 +398,7 @@ public:
         : qb::io::use<InvalidVersionClient>::tcp::client<>()
         , _ws_key(qb::http::ws::generateKey()) {
         // Set a timeout for the connection
-        this->setTimeout(2000); // 2 second timeout
+        this->setTimeout(2); // 2 second timeout
     }
 
     /**
@@ -413,7 +412,7 @@ public:
             << "InvalidVersionClient: Sending handshake with invalid version and key: "
             << _ws_key << std::endl;
         qb::http::Request r;
-        r.method        = HTTP_GET;
+        r.method()        = HTTP_GET;
         r.uri()         = "localhost:9995/";
         r.major_version = 1;
         r.minor_version = 1;
@@ -436,11 +435,11 @@ public:
      * Expects rejection of the invalid version.
      */
     void
-    on(typename Protocol::response &&event) {
+    on(typename Protocol::response &&response) {
         std::cout << "InvalidVersionClient: Received response with status "
-                  << event.http.status_code << std::endl;
+                  << response.status() << std::endl;
         // Should be rejected
-        if (event.http.status_code != HTTP_STATUS_SWITCHING_PROTOCOLS) {
+        if (response.status() != qb::http::status::SWITCHING_PROTOCOLS) {
             std::cout << "InvalidVersionClient: Non-switching protocol response "
                          "detected, incrementing rejection count"
                       << std::endl;
@@ -500,7 +499,7 @@ public:
         : qb::io::use<UnmaskedFrameClient>::tcp::client<>()
         , _ws_key(qb::http::ws::generateKey()) {
         // Set a timeout for the connection
-        this->setTimeout(2000); // 2 second timeout
+        this->setTimeout(2); // 2 second timeout
     }
 
     /**
@@ -559,7 +558,7 @@ public:
         }
 
         // Set a timeout to detect if the server doesn't close the connection
-        this->setTimeout(1000);
+        this->setTimeout(1);
     }
 
     /**
@@ -569,11 +568,11 @@ public:
      * If handshake is successful, proceed to send an unmasked frame.
      */
     void
-    on(typename Protocol::response &&event) {
+    on(typename Protocol::response &&response) {
         std::cout << "UnmaskedFrameClient: Received response with status "
-                  << event.http.status_code << std::endl;
+                  << response.status() << std::endl;
 
-        if (this->switch_protocol<WS_Protocol>(*this, event.http, _ws_key)) {
+        if (this->switch_protocol<WS_Protocol>(*this, response, _ws_key)) {
             std::cout << "UnmaskedFrameClient: Handshake successful, switching to "
                          "WebSocket protocol"
                       << std::endl;
