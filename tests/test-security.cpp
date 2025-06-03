@@ -369,7 +369,7 @@ public:
      * @param _ The disconnection event (unused)
      */
     void
-    on(qb::io::async::event::disconnected &) {
+    on(qb::io::async::event::disconnected const &) {
         std::cout << "InvalidKeyClient: Disconnected" << std::endl;
     }
 };
@@ -466,7 +466,7 @@ public:
      * @param _ The disconnection event (unused)
      */
     void
-    on(qb::io::async::event::disconnected &) {
+    on(qb::io::async::event::disconnected const &) {
         std::cout << "InvalidVersionClient: Disconnected" << std::endl;
     }
 };
@@ -625,7 +625,7 @@ public:
      * should actively close the connection after an unmasked frame.
      */
     void
-    on(qb::io::async::event::disconnected &) {
+    on(qb::io::async::event::disconnected const &) {
         // If we were disconnected after sending an unmasked frame, count as rejection
         std::cout << "UnmaskedFrameClient: Disconnected" << std::endl;
         if (_handshake_complete) {

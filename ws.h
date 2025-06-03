@@ -86,6 +86,11 @@ struct Message {
     ::qb::allocator::pipe<char>
         _data; /**< Internal buffer storing the message payload */
 
+    ::qb::allocator::pipe<char>&
+    data() noexcept {
+        return _data;
+    } /**< Pointer to the message data buffer */
+
     /**
      * @brief Get the size of the message payload
      * @return Size of the message data in bytes
@@ -509,7 +514,7 @@ public:
     template <typename HttpRequest>
     ws_server(IO_ &io, HttpRequest const &http)
         : ws_internal::base<IO_>(io) {
-        static auto ws_magic_string = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+        static const auto ws_magic_string = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
         if (http.upgrade) {
             std::string ws_key(http.header("Sec-WebSocket-Key"));
             if (!ws_key.empty()) {
@@ -533,6 +538,29 @@ public:
         }
         this->not_ok();
     }
+
+    template <typename HttpRequest, typename HttpResponse>
+    ws_server(IO_ &io, HttpRequest const &request, HttpResponse &response)
+        : ws_internal::base<IO_>(io) {
+        static const auto ws_magic_string = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+        if (request.upgrade) {
+            std::string ws_key(request.header("Sec-WebSocket-Key"));
+            if (!ws_key.empty()) {
+                ws_key += ws_magic_string;
+                response.status() = qb::http::status::SWITCHING_PROTOCOLS;
+                response.headers()["Upgrade"].emplace_back("websocket");
+                response.headers()["Connection"].emplace_back("Upgrade");
+                response.headers()["Sec-WebSocket-Accept"].emplace_back(
+                    crypto::base64::encode(crypto::sha1(ws_key)));
+
+                endpoint = request.uri().path();
+                return;
+            }
+            // error
+        }
+        this->not_ok();
+    }
+
 };
 
 template <typename IO_>
