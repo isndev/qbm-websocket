@@ -483,6 +483,7 @@ public:
                       << " sending close message after sending " << _messages_sent
                       << " messages" << std::endl;
             qb::http::ws::MessageClose msg(qb::http::ws::CloseStatus::Normal);
+            msg.masked = true;
             *this << msg;
             return;
         }
@@ -497,6 +498,7 @@ public:
         std::string data = generate_test_data(message_size);
 
         qb::http::ws::MessageText msg;
+        msg.masked = true;
         msg << data;
         std::cout << "Client " << _client_id << " sending message #"
                   << (_messages_sent + 1) << ", size=" << data.size() << std::endl;
@@ -1081,6 +1083,7 @@ TEST(Stress, LONG_LIVED_CONNECTIONS) {
                     int current_time = static_cast<int>(client_timer.elapsed_ms());
                     if (current_time - last_ping_time >= ping_interval_ms) {
                         qb::http::ws::MessagePing ping;
+                        ping.masked = true;
                         ping << "PING-" + std::to_string(i) + "-" +
                                     std::to_string(current_time);
                         client << ping;
@@ -1095,6 +1098,7 @@ TEST(Stress, LONG_LIVED_CONNECTIONS) {
 
                 // After the timeout, send close frame and disconnect
                 qb::http::ws::MessageClose close(qb::http::ws::CloseStatus::Normal);
+                close.masked = true;
                 client << close;
                 std::cout << "Client " << i << " sent close frame after "
                           << client_timer.elapsed_ms() << "ms" << std::endl;

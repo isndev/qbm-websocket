@@ -112,7 +112,6 @@ public:
     void
     on(WS_Protocol::message &&event) {
         EXPECT_EQ(STRING_MESSAGE, std::string(event.data, event.size));
-        event.ws.masked = false;
         *this << event.ws;
         ++msg_count_server_side;
     }
@@ -212,6 +211,7 @@ public:
         else {
             for (auto i = 0u; i < NB_ITERATION; ++i) {
                 qb::http::ws::MessageText new_event;
+                new_event.masked = true;
                 new_event << STRING_MESSAGE;
                 *this << new_event;
             }
@@ -331,7 +331,6 @@ public:
     void
     on(WS_Protocol::message &&event) {
         EXPECT_EQ(STRING_MESSAGE, std::string(event.data, event.size));
-        event.ws.masked = false;
         *this << event.ws;
         ++msg_count_server_side;
     }
@@ -422,6 +421,7 @@ public:
         else {
             for (auto i = 0u; i < NB_ITERATION; ++i) {
                 qb::http::ws::MessageText new_event;
+                new_event.masked = true;
                 new_event << STRING_MESSAGE;
                 *this << new_event;
             }

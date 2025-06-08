@@ -31,6 +31,60 @@ namespace http {
 namespace ws {
 
 /**
+ * @brief Checks if a string view contains valid UTF-8 data.
+ *
+ * This function validates a sequence of bytes to ensure it conforms to the
+ * UTF-8 encoding rules as specified in RFC 3629. It checks for:
+ * - Correct number of continuation bytes for multi-byte sequences.
+ * - Correct format of continuation bytes (10xxxxxx).
+ * - Absence of overlong encodings.
+ * - Absence of surrogate code points (U+D800 to U+DFFF).
+ * - Code points within the valid Unicode range (up to U+10FFFF).
+ *
+ * @param sv The string_view to validate.
+ * @return True if the data is valid UTF-8, false otherwise.
+ */
+bool
+is_utf8(std::string_view sv) noexcept {
+    auto it = sv.begin();
+    while (it != sv.end()) {
+        unsigned char c = *it;
+        ++it;
+
+        if (c < 0x80) { // 0xxxxxxx (ASCII)
+            continue;
+        }
+
+        if (c < 0xC2 || c > 0xF4) { // Invalid start byte
+            return false;
+        }
+
+        size_t extra_bytes = 0;
+        if (c < 0xE0) { // 110xxxxx 10xxxxxx
+            extra_bytes = 1;
+        } else if (c < 0xF0) { // 1110xxxx 10xxxxxx 10xxxxxx
+            extra_bytes = 2;
+        } else { // 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
+            extra_bytes = 3;
+        }
+
+        if (std::distance(it, sv.end()) < extra_bytes) {
+            return false; // Not enough bytes left
+        }
+
+        // Check continuation bytes
+        for (size_t i = 0; i < extra_bytes; ++i) {
+            unsigned char next_byte = *it;
+            ++it;
+            if ((next_byte & 0xC0) != 0x80) { // Must be 10xxxxxx
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/**
  * @brief Generate a random WebSocket key for handshake
  * @return Base64-encoded random 16-byte value
  *
@@ -44,8 +98,9 @@ generateKey() noexcept {
     char                                          nonce[16] = "";
     std::uniform_int_distribution<unsigned short> dist(0, 255);
     std::random_device                            rd;
-    for (char &i : nonce)
+    for (char &i : nonce) {
         i = static_cast<char>(dist(rd));
+    }
     return crypto::base64::encode({nonce, 16});
 }
 

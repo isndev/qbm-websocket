@@ -97,7 +97,7 @@ public:
         } else {
             std::cout << _client_id << " received non-WebSocket request." << std::endl;
             // Handle as a normal HTTP request or send error
-            qb::http::Response res(qb::http::qb::http::status::BAD_REQUEST, "Expected WebSocket Upgrade");
+            qb::http::Response res(qb::http::status::BAD_REQUEST, "Expected WebSocket Upgrade");
             *this << res;
             disconnect();
         }

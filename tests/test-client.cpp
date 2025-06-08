@@ -112,7 +112,6 @@ public:
                   << std::endl;
 
         // Echo the message back
-        event.ws.masked = false;
         *this << event.ws;
     }
 
@@ -353,6 +352,156 @@ TEST(WebSocketClient, EchoTest) {
     EXPECT_EQ(messages_sent, MESSAGE_COUNT);
     EXPECT_EQ(messages_received, MESSAGE_COUNT);
     EXPECT_GE(pings_received, 0); // Pings are optional in this test
+}
+
+/**
+ * @brief Test for new callback-based WebSocket Client functionality
+ *
+ * This test validates the new ws::client implementation with callbacks by:
+ * 1. Using the existing echo server
+ * 2. Connecting with the callback-based client
+ * 3. Configuring event handlers with lambdas
+ * 4. Sending messages and verifying echoes
+ * 5. Testing proper connection lifecycle
+ */
+TEST(WebSocketClient, CallbackClientTest) {
+    // Reset test state
+    messages_received = 0;
+    messages_sent     = 0;
+    pings_received    = 0;
+    test_complete     = false;
+
+    // Track additional state for callback client
+    std::atomic<bool> connected{false};
+    std::atomic<bool> error_occurred{false};
+
+    // Initialize async event system
+    async::init();
+
+    // Create and start echo server on different port
+    EchoServer server;
+    ASSERT_EQ(SocketStatus::Done, server.transport().listen_v6(9999));
+    server.start();
+
+    // Create client in a separate thread
+    std::thread client_thread([&connected, &error_occurred]() {
+        async::init();
+
+        // Create callback-based WebSocket client
+        qb::http::ws::client ws_client;
+
+        // Configure callbacks using method chaining
+        ws_client.on_connected([&connected](auto& event) {
+            std::cout << "Callback client: WebSocket connected!" << std::endl;
+            connected = true;
+        })
+        .on_message([](auto& event) {
+            std::string message(event.data, event.size);
+            std::cout << "Callback client: Received message: " << message << std::endl;
+            ++messages_received;
+
+            // Check if we've received all expected messages
+            if (messages_received >= MESSAGE_COUNT) {
+                std::cout << "Callback client: All " << MESSAGE_COUNT
+                          << " messages received, closing connection" << std::endl;
+
+                // Send close frame
+                qb::http::ws::MessageClose close_msg(1000, "Test completed");
+                // Note: We can't access the client from here directly
+                // The close will be handled by the main loop
+
+                // Signal test completion
+                {
+                    std::lock_guard<std::mutex> lock(test_mutex);
+                    test_complete = true;
+                }
+                test_cv.notify_all();
+            }
+        })
+        .on_error([&error_occurred](auto& event) {
+            std::cout << "Callback client: Error occurred!" << std::endl;
+            error_occurred = true;
+            
+            // Signal test completion
+            {
+                std::lock_guard<std::mutex> lock(test_mutex);
+                test_complete = true;
+            }
+            test_cv.notify_all();
+        })
+        .on_ping([](auto& event) {
+            std::cout << "Callback client: Received ping frame of size " << event.size << std::endl;
+            ++pings_received;
+        })
+        .on_pong([](auto& event) {
+            std::cout << "Callback client: Received pong frame of size " << event.size << std::endl;
+        })
+        .on_closed([](auto& event) {
+            std::cout << "Callback client: WebSocket connection closed" << std::endl;
+            
+            // Signal test completion
+            {
+                std::lock_guard<std::mutex> lock(test_mutex);
+                test_complete = true;
+            }
+            test_cv.notify_all();
+        })
+        .on_disconnected([](auto& event) {
+            std::cout << "Callback client: TCP connection closed" << std::endl;
+            
+            // Signal test completion
+            {
+                std::lock_guard<std::mutex> lock(test_mutex);
+                test_complete = true;
+            }
+            test_cv.notify_all();
+        });
+
+        // Connect to the server
+        qb::io::uri uri("ws://localhost:9999/");
+        ws_client.connect(uri);
+
+        // Wait for connection to be established
+        run_until([&connected]() { return connected.load(); }, 1000, 10);
+
+        // Send test messages if connected
+        if (connected) {
+            std::cout << "Callback client: Connection established, sending messages..." << std::endl;
+            
+            for (size_t i = 0; i < MESSAGE_COUNT; ++i) {
+                std::string message_text = std::string(TEST_MESSAGE) + " #" + std::to_string(i);
+                
+                qb::http::ws::MessageText msg;
+                msg << message_text;
+                ws_client << msg;
+                ++messages_sent;
+                
+                std::cout << "Callback client: Sent message: " << message_text << std::endl;
+            }
+        }
+
+        // Process events until test completes
+        run_until([]() { return test_complete; }, 2000, 10);
+
+        // Send close message if still connected and not completed due to error
+        if (connected && !error_occurred && messages_received >= MESSAGE_COUNT) {
+            qb::http::ws::MessageClose close_msg(1000, "Test completed");
+            ws_client << close_msg;
+        }
+    });
+
+    // Process server events in main thread
+    run_until([]() { return test_complete; }, 2000, 10);
+
+    // Wait for client thread to finish
+    client_thread.join();
+
+    // Verify test results
+    EXPECT_TRUE(connected) << "Client should have connected successfully";
+    EXPECT_FALSE(error_occurred) << "No errors should have occurred";
+    EXPECT_EQ(messages_sent, MESSAGE_COUNT) << "Should have sent " << MESSAGE_COUNT << " messages";
+    EXPECT_EQ(messages_received, MESSAGE_COUNT) << "Should have received " << MESSAGE_COUNT << " messages";
+    EXPECT_GE(pings_received, 0) << "Pings are optional in this test";
 }
 
 /**

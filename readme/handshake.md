@@ -33,10 +33,9 @@ Origin: http://example.com
 *   `Sec-WebSocket-Extensions` (Optional): A comma-separated list of extensions the client wants to use.
 
 **QB Client Implementation:**
-*   The `qb::http::WebSocketRequest` class (`ws.h`) simplifies creating this request. It automatically includes the `Upgrade`, `Connection`, `Sec-WebSocket-Key`, and `Sec-WebSocket-Version` headers.
-*   You still need to set the `Host` header and the `uri`.
-*   You can add optional headers like `Sec-WebSocket-Protocol` manually to the `request.headers()` map.
-*   The `qb::http::ws::generateKey()` function (`ws.cpp`) is used internally by `WebSocketRequest` to create the random key.
+*   The `qb::http::ws::WebSocket<T>` client class template (`ws.h`) is the primary way to create a client. It internally calls `qb::http::ws::generateKey()` to create a random key.
+*   It then instantiates a `qb::http::WebSocketRequest` object, passing the generated key to its constructor. This request object automatically includes the required `Upgrade`, `Connection`, and `Sec-WebSocket-Version` headers.
+*   You can add optional headers like `Sec-WebSocket-Protocol` manually to the `request.headers()` map before the connection is initiated.
 
 ## Server Response
 

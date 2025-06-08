@@ -253,6 +253,7 @@ public:
         } else {
             // Connection established - send a simple message
             qb::http::ws::MessageText msg;
+            msg.masked = true;
             msg << "Hello, secure server";
             *this << msg;
         }
@@ -268,6 +269,7 @@ public:
     on(typename WS_Protocol::message &&event) {
         // Message received - close connection
         qb::http::ws::MessageClose close_msg(qb::http::ws::CloseStatus::Normal);
+        close_msg.masked = true;
         *this << close_msg;
     }
 

@@ -224,7 +224,6 @@ public:
         if ((event.ws.fin_rsv_opcode & 0x0f) == 1) {
             // Text frame
             _last_message   = std::string(event.data, event.size);
-            event.ws.masked = false;
             *this << event.ws;
             ++text_message_count;
         } else if ((event.ws.fin_rsv_opcode & 0x0f) == 2) {
@@ -233,7 +232,6 @@ public:
                       << event.size << std::endl;
             _last_binary.assign(event.data, event.data + event.size);
             try {
-                event.ws.masked = false;
                 std::cout << "RobustServerClient: Sending binary message back, size="
                           << event.size << std::endl;
                 *this << event.ws;
@@ -522,6 +520,7 @@ public:
         last_ping_data_ = std::string(event.data, event.size);
         // Dans le mode "raw", nous devons explicitement créer et envoyer un PONG
         qb::http::ws::MessagePong pong;
+        pong.masked = true;
         pong << last_ping_data_;
         *this << pong;
         std::cout << "Client sent PONG in response to PING" << std::endl;
@@ -580,6 +579,7 @@ public:
     void
     send_text_message(const std::string &text) {
         qb::http::ws::MessageText msg;
+        msg.masked = true;
         msg << text;
         *this << msg;
     }
@@ -594,6 +594,7 @@ public:
         std::cout << "RobustClient: Creating binary message of size " << data.size()
                   << std::endl;
         qb::http::ws::MessageBinary msg;
+        msg.masked = true;
         try {
             // Utiliser directement l'opérateur << avec une string construite à partir
             // des données binaires
@@ -619,6 +620,7 @@ public:
     void
     send_ping(const std::string &data = "") {
         qb::http::ws::MessagePing msg;
+        msg.masked = true;
         msg << data;
         *this << msg;
         std::cout << "Client sent PING with data: " << data << std::endl;
@@ -634,6 +636,7 @@ public:
     send_close(int code = 1000, const std::string &reason = "Closed") {
         current_state_ = Closing;
         qb::http::ws::MessageClose msg(code, reason);
+        msg.masked = true;
         *this << msg;
     }
 

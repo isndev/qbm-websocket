@@ -11,33 +11,36 @@
   <img src="https://img.shields.io/badge/License-Apache%202.0-green.svg" alt="License"/>
 </p>
 
-This module extends the `qbm-http` module to provide production-ready WebSocket support, enabling real-time, bidirectional communication over persistent TCP connections. Built on QB's asynchronous I/O foundation, it delivers high-performance WebSocket capabilities without blocking your actors.
+`qbm-ws` extends the `qbm-http` module to provide production-ready WebSocket support, enabling real-time bidirectional communication. Built on top of QB's asynchronous I/O foundations, it offers high-performance WebSocket capabilities that integrate seamlessly with HTTP servers and clients.
+
+Whether you're building chat applications, real-time data streaming, or collaborative tools, `qbm-ws` provides the foundation you need with minimal complexity.
 
 ## Quick Integration with QB
 
 ### Adding to Your QB Project
 
 ```bash
-# Add both HTTP and WebSocket modules as submodules
+# Add HTTP and WebSocket modules as submodules
 git submodule add https://github.com/isndev/qbm-http qbm/http
 git submodule add https://github.com/isndev/qbm-ws qbm/ws
 ```
 
-### CMake Setup
+### CMake Configuration
 
 ```cmake
-# QB framework setup
+# QB Framework setup
 add_subdirectory(qb)
 include_directories(${QB_PATH}/include)
 
-# Load QB modules (automatically discovers both modules)
+# Load QB modules (auto-discovers both http and ws modules)
 qb_load_modules("${CMAKE_CURRENT_SOURCE_DIR}/qbm")
 
-# Link against both HTTP and WebSocket modules
+# Link with HTTP and WebSocket modules
+# qbm::http is required as a dependency
 target_link_libraries(your_target PRIVATE qbm::http qbm::ws)
 ```
 
-### Include and Use
+### Include and Usage
 
 ```cpp
 #include <http/http.h>   // Required for HTTP handshake
@@ -46,73 +49,91 @@ target_link_libraries(your_target PRIVATE qbm::http qbm::ws)
 
 ## Why Choose `qbm-ws`?
 
-**RFC 6455 Compliance**: Full implementation of the WebSocket protocol including handshake, framing, masking, and all message types.
+-   **RFC 6455 Compliant**: Complete WebSocket protocol implementation including handshake, framing, masking, and all control frames.
+-   **Seamless HTTP Integration**: Effortlessly upgrades standard HTTP connections to WebSocket, leveraging the power of `qbm-http`.
+-   **High Performance**: Built on `qb-io`'s non-blocking event loop to handle thousands of concurrent connections with low overhead.
+-   **Flexible Client APIs**: Choose between a simple, modern callback-based client or a powerful, stateful inheritance-based one.
+-   **Secure by Default**: Full, easy-to-use support for Secure WebSockets (WSS) over TLS.
 
-**HTTP Integration**: Seamless upgrade from HTTP connections using the existing `qbm-http` infrastructure.
+## Core Concept: The HTTP Upgrade
 
-**High Performance**: Built on QB's non-blocking I/O for handling thousands of concurrent WebSocket connections.
+WebSockets begin their life as a standard HTTP `GET` request containing special `Upgrade` headers. The server responds with a `101 Switching Protocols` status, and from that moment, the underlying TCP connection is repurposed for the WebSocket binary framing protocol.
 
-**Security Ready**: Full support for secure WebSocket connections (WSS) with SSL/TLS encryption.
+`qbm-ws` manages this handshake gracefully. An HTTP server receives the upgrade request, and then "hands over" the connection's I/O transport to a WebSocket protocol handler. This allows for incredible flexibility, such as running a REST API and a WebSocket service on the same port.
 
-**Cross-Platform**: Same code runs on Linux, macOS, Windows (x86_64, ARM64) with identical performance.
+## Your First WebSocket Server in 60 Seconds
 
-## Quick Start: WebSocket Echo Server
+This example creates a self-contained "pure" WebSocket echo server. It's a lightweight TCP server that listens on a port, handles the initial HTTP upgrade handshake itself, and then communicates using the WebSocket protocol. This is the most direct way to create a dedicated WebSocket service.
 
 ```cpp
-#include <http/http.h>
-#include <ws/ws.h>
 #include <qb/main.h>
+#include <http/http.h> // For handshake and response objects
+#include <ws/ws.h>
+#include <iostream>
 
-class EchoServer : public qb::Actor, public qb::http::Server<> {
+class EchoServer; // Forward declaration
+
+// This session class handles a single client connection.
+class EchoClientSession : public qb::io::use<EchoClientSession>::tcp::client<EchoServer> {
+public:
+    // Define the protocol handlers we'll use.
+    using http_protocol = qb::http::protocol_view<EchoClientSession>;
+    using ws_protocol = qb::http::ws::protocol<EchoClientSession>;
+
+    explicit EchoClientSession(EchoServer &server) : client(server) {}
+
+    // 1. This is the first handler called for a new connection.
+    //    It receives the raw HTTP request and attempts the handshake.
+    void on(http_protocol::request &&request) {
+        std::cout << "Server received an HTTP request for upgrade." << std::endl;
+
+        // 2. switch_protocol is the core mechanism. It attempts the handshake
+        //    using the provided request. If successful, it atomically replaces the
+        //    HTTP parser on this connection with the WebSocket parser.
+        //    It returns 'false' if the handshake fails.
+        if (!this->template switch_protocol<ws_protocol>(*this, request)) {
+            std::cerr << "Failed to switch to WebSocket protocol." << std::endl;
+            this->disconnect();
+        } else {
+            std::cout << "Successfully upgraded to WebSocket protocol." << std::endl;
+        }
+    }
+
+    // 3. This handler is now active and will be called for all subsequent
+    //    WebSocket data frames (Text or Binary).
+    void on(ws_protocol::message &&event) {
+        std::cout << "Server received message: "
+                  << std::string_view(event.data, event.size) << std::endl;
+
+        // Echo the message back to the client.
+        *this << event.ws;
+    }
+
+    // Handle client disconnection.
+    void on(qb::io::async::event::disconnected &&) {
+        std::cout << "Client disconnected." << std::endl;
+    }
+};
+
+// The server class itself. It's a simple TCP server that creates
+// an EchoClientSession for each new connection.
+class EchoServer : public qb::Actor,
+                   public qb::io::use<EchoServer>::tcp::server<EchoClientSession> {
 public:
     bool onInit() override {
-        // Handle WebSocket upgrade requests
-        router().get("/ws", [this](auto ctx) {
-            auto& request = ctx->request();
-            
-            // Validate WebSocket headers
-            if (request.header("upgrade") == "websocket" && 
-                request.header("connection").find("upgrade") != std::string::npos) {
-                
-                // Upgrade to WebSocket protocol
-                upgrade_to_websocket(ctx);
-            } else {
-                ctx->response().status() = qb::http::Status::BAD_REQUEST;
-                ctx->response().body() = "WebSocket upgrade required";
-                ctx->complete();
-            }
-        });
-        
-        router().compile();
-        
-        if (listen({"tcp://0.0.0.0:8080"})) {
-            start();
-            qb::io::cout() << "WebSocket server running on ws://localhost:8080/ws" << std::endl;
+        // This is a lower-level TCP listen, not the http::server listen.
+        if (this->transport().listen_v6(8080)) {
+            this->start();
+            std::cout << "Pure WebSocket echo server running at ws://localhost:8080/" << std::endl;
+            return true;
         }
-        
-        return true;
+        std::cerr << "Failed to listen on port 8080" << std::endl;
+        return false;
     }
-    
-private:
-    void upgrade_to_websocket(std::shared_ptr<qb::http::Context<qb::http::DefaultSession>> ctx) {
-        // Switch to WebSocket protocol
-        ctx->switch_protocol<qb::http::ws::protocol>([this](auto ws_session) {
-            // New WebSocket connection established
-            qb::io::cout() << "New WebSocket connection established" << std::endl;
-            
-            // Register WebSocket event handlers
-            ws_session->on_message([](const std::string& message) {
-                qb::io::cout() << "Received: " << message << std::endl;
-                
-                // Echo the message back
-                qb::http::ws::MessageText reply("Echo: " + message);
-                ws_session->send(reply);
-            });
-            
-            ws_session->on_close([](int code, const std::string& reason) {
-                qb::io::cout() << "WebSocket closed: " << code << " - " << reason << std::endl;
-            });
-        });
+
+    // (Optional) Hook called by the server base when a new session is created.
+    void on(EchoClientSession &session) {
+        std::cout << "New client connecting..." << std::endl;
     }
 };
 
@@ -120,529 +141,277 @@ int main() {
     qb::Main engine;
     engine.addActor<EchoServer>(0);
     engine.start();
+    engine.join(); // Keep server running
     return 0;
 }
 ```
 
-That's it! A complete WebSocket server that echoes messages back to clients.
+## Advanced Architecture: Integrating with an HTTP Server
 
-## Real-World Examples
+For applications that need to serve both a standard HTTP/REST API and a WebSocket service on the same port, `qbm-ws` integrates seamlessly with `qbm-http`. This is the recommended pattern for production.
 
-### Chat Room Server
+The key is separating responsibilities:
+1.  An **HttpServer Actor** handles all HTTP traffic using the `qb::http::Router`. When a request comes to `/ws`, it...
+2.  **Extracts the I/O transport** from the connection and sends it in an event to a...
+3.  **WebSocketServer Actor**, which is purely an `io_handler`. It takes ownership of the connection and manages the WebSocket lifecycle.
+
+### The Event: Transferring the Connection
+
+The link between the two servers is an actor event. The event must carry the three essential components to complete the handshake on the other side.
 
 ```cpp
-#include <http/http.h>
-#include <ws/ws.h>
-#include <qb/main.h>
-#include <qb/json.h>
-#include <unordered_set>
+// This event acts as a container to move the connection state between actors.
+struct TransferToWebSocketEvent : public qb::Event {
+    // A struct is used to hold the data to ensure proper lifetime management.
+    struct Data {
+        // 1. The underlying I/O transport (the raw socket connection).
+        //    This is the most critical piece.
+        HttpSession::transport_io_type transport;
 
-class ChatServer : public qb::Actor, public qb::http::Server<> {
-    std::unordered_set<qb::http::ws::Session*> _connections;
-    
-public:
-    bool onInit() override {
-        // Serve static HTML page
-        router().get("/", [](auto ctx) {
-            ctx->response().body() = R"(
-<!DOCTYPE html>
-<html>
-<head><title>QB Chat</title></head>
-<body>
-    <div id="messages"></div>
-    <input type="text" id="messageInput" placeholder="Type a message...">
-    <button onclick="sendMessage()">Send</button>
-    
-    <script>
-        const ws = new WebSocket('ws://localhost:8080/chat');
-        const messages = document.getElementById('messages');
-        
-        ws.onmessage = function(event) {
-            const data = JSON.parse(event.data);
-            messages.innerHTML += '<div>' + data.user + ': ' + data.message + '</div>';
-        };
-        
-        function sendMessage() {
-            const input = document.getElementById('messageInput');
-            if (input.value) {
-                ws.send(JSON.stringify({
-                    type: 'message',
-                    user: 'User',
-                    message: input.value
-                }));
-                input.value = '';
-            }
-        }
-        
-        document.getElementById('messageInput').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') sendMessage();
-        });
-    </script>
-</body>
-</html>
-            )";
-            ctx->complete();
-        });
-        
-        // WebSocket chat endpoint
-        router().get("/chat", [this](auto ctx) {
-            upgrade_to_chat_websocket(ctx);
-        });
-        
-        router().compile();
-        
-        if (listen({"tcp://0.0.0.0:8080"})) {
-            start();
-            qb::io::cout() << "Chat server running on http://localhost:8080" << std::endl;
-        }
-        
-        return true;
-    }
-    
-private:
-    void upgrade_to_chat_websocket(std::shared_ptr<qb::http::Context<qb::http::DefaultSession>> ctx) {
-        ctx->switch_protocol<qb::http::ws::protocol>([this](auto ws_session) {
-            // Add to active connections
-            _connections.insert(ws_session.get());
-            qb::io::cout() << "New chat user connected. Total users: " << _connections.size() << std::endl;
-            
-            // Send welcome message
-            qb::json welcome = {
-                {"type", "system"},
-                {"message", "Welcome to QB Chat!"},
-                {"users", _connections.size()}
-            };
-            qb::http::ws::MessageText welcome_msg(welcome.dump());
-            ws_session->send(welcome_msg);
-            
-            // Handle incoming messages
-            ws_session->on_message([this, ws_session](const std::string& message) {
-                try {
-                    auto data = qb::json::parse(message);
-                    
-                    if (data["type"] == "message") {
-                        // Broadcast message to all connected clients
-                        qb::json broadcast = {
-                            {"type", "message"},
-                            {"user", data["user"]},
-                            {"message", data["message"]},
-                            {"timestamp", qb::time::now().to_string()}
-                        };
-                        
-                        broadcast_to_all(broadcast.dump());
-                    }
-                } catch (const std::exception& e) {
-                    qb::io::cout() << "Invalid message format: " << e.what() << std::endl;
-                }
-            });
-            
-            // Handle disconnection
-            ws_session->on_close([this, ws_session](int code, const std::string& reason) {
-                _connections.erase(ws_session.get());
-                qb::io::cout() << "User disconnected. Remaining users: " << _connections.size() << std::endl;
-                
-                // Notify remaining users
-                qb::json notification = {
-                    {"type", "system"},
-                    {"message", "A user has left the chat"},
-                    {"users", _connections.size()}
-                };
-                broadcast_to_all(notification.dump());
-            });
-        });
-    }
-    
-    void broadcast_to_all(const std::string& message) {
-        qb::http::ws::MessageText msg(message);
-        
-        for (auto* connection : _connections) {
-            try {
-                connection->send(msg);
-            } catch (const std::exception& e) {
-                qb::io::cout() << "Failed to send to client: " << e.what() << std::endl;
-            }
-        }
-    }
+        // 2. The original HTTP request, containing the necessary upgrade headers.
+        qb::http::Request request;
+
+        // 3. The response object, which will be used to send the
+        //    "101 Switching Protocols" reply back down the transport.
+        qb::http::Response response;
+    };
+
+    std::unique_ptr<Data> data;
+
+    TransferToWebSocketEvent() : data(std::make_unique<Data>()) {}
 };
-
-int main() {
-    qb::Main engine;
-    engine.addActor<ChatServer>(0);
-    engine.start();
-    return 0;
-}
 ```
 
-### Real-time Data Stream
+### The Integrated Flow
+
+#### 1. HTTP Server Extracts and Forwards the Connection
 
 ```cpp
-#include <http/http.h>
-#include <ws/ws.h>
-#include <qb/main.h>
-#include <qb/json.h>
-
-class DataStreamServer : public qb::Actor, public qb::http::Server<> {
-    std::vector<qb::http::ws::Session*> _subscribers;
-    qb::io::timer _data_timer;
-    
+// In your main HttpServer class (which inherits from qb::http::server)
+class HttpServer : public qb::Actor,
+                   public qb::http::use<HttpServer>::server<HttpSession> {
 public:
     bool onInit() override {
-        // WebSocket endpoint for real-time data
-        router().get("/stream", [this](auto ctx) {
-            auto& request = ctx->request();
-            
-            if (is_websocket_request(request)) {
-                upgrade_to_data_stream(ctx);
+        // The /ws route handler is now defined directly in the router setup.
+        router().get("/ws", [this](auto ctx) {
+            std::cout << "[HTTP] WebSocket upgrade requested. Transferring to handler..." << std::endl;
+
+            // Extract the underlying TCP transport from the HTTP session.
+            auto [transport, success] = this->extractSession(ctx->session()->id());
+
+            if (success) {
+                // Create an actor event and move the connection state into it.
+                auto &event = push<TransferToWebSocketEvent>(_webSocketHandlerId);
+                event.data->transport = std::move(transport);
+                event.data->request   = std::move(ctx->request());
+                event.data->response  = std::move(ctx->response());
             } else {
-                ctx->response().status() = qb::http::Status::BAD_REQUEST;
-                ctx->response().body() = "WebSocket required";
+                ctx->response().status() = qb::http::Status::INTERNAL_SERVER_ERROR;
+                ctx->response().body() = "Failed to upgrade to WebSocket";
                 ctx->complete();
             }
         });
-        
+
         router().compile();
-        
-        if (listen({"tcp://0.0.0.0:8080"})) {
-            start();
-            start_data_generation();
-            qb::io::cout() << "Data stream server running on ws://localhost:8080/stream" << std::endl;
-        }
-        
+        // ... listen and start ...
         return true;
     }
-    
 private:
-    bool is_websocket_request(const qb::http::Request& request) {
-        return request.header("upgrade") == "websocket" && 
-               request.header("connection").find("upgrade") != std::string::npos;
-    }
-    
-    void upgrade_to_data_stream(std::shared_ptr<qb::http::Context<qb::http::DefaultSession>> ctx) {
-        ctx->switch_protocol<qb::http::ws::protocol>([this](auto ws_session) {
-            _subscribers.push_back(ws_session.get());
-            qb::io::cout() << "New data subscriber. Total: " << _subscribers.size() << std::endl;
-            
-            // Send initial data
-            send_current_stats(ws_session.get());
-            
-            ws_session->on_close([this, ws_session](int code, const std::string& reason) {
-                auto it = std::find(_subscribers.begin(), _subscribers.end(), ws_session.get());
-                if (it != _subscribers.end()) {
-                    _subscribers.erase(it);
-                    qb::io::cout() << "Subscriber disconnected. Remaining: " << _subscribers.size() << std::endl;
-                }
-            });
-        });
-    }
-    
-    void start_data_generation() {
-        // Generate and broadcast data every second
-        _data_timer.schedule(id(), 1000_ms, [this]() {
-            generate_and_broadcast_data();
-            start_data_generation(); // Schedule next update
-        });
-    }
-    
-    void generate_and_broadcast_data() {
-        // Generate sample data
-        qb::json data = {
-            {"timestamp", qb::time::now().to_string()},
-            {"cpu_usage", rand() % 100},
-            {"memory_usage", rand() % 100},
-            {"active_connections", _subscribers.size()},
-            {"requests_per_second", rand() % 1000 + 100}
-        };
-        
-        qb::http::ws::MessageText message(data.dump());
-        
-        // Broadcast to all subscribers
-        auto it = _subscribers.begin();
-        while (it != _subscribers.end()) {
-            try {
-                (*it)->send(message);
-                ++it;
-            } catch (const std::exception& e) {
-                qb::io::cout() << "Removing disconnected subscriber" << std::endl;
-                it = _subscribers.erase(it);
-            }
+    qb::ActorId _webSocketHandlerId;
+};
+```
+
+#### 2. WebSocket Handler Actor Receives and Finalizes the Handshake
+
+```cpp
+// In your WebSocketServer class (which inherits from qb::io::io_handler)
+class WebSocketServer : public qb::Actor,
+                        public qb::io::use<WebSocketServer>::tcp::io_handler<ChatSession> {
+public:
+    void on(TransferToWebSocketEvent& event) {
+        // 1. Receive the transport from the event and create a new WebSocket session.
+        auto& chat_session = registerSession(std::move(event.data->transport));
+
+        // 2. The key step: switch the protocol from HTTP to WebSocket.
+        //    This call attempts the handshake using the original request's headers.
+        //    If the handshake is valid, it returns true and populates the response
+        //    object with the correct "101 Switching Protocols" headers.
+        if (chat_session.template switch_protocol<ChatSession::ws_protocol>(chat_session, event.data->request, event.data->response)) {
+            // 3. Handshake succeeded. Send the populated response to the client
+            //    to finalize the protocol switch.
+            std::cout << "[WS] Handshake successful. Sending 101 response." << std::endl;
+            chat_session << event.data->response;
+        } else {
+            // 4. Handshake failed. The request was not a valid WebSocket upgrade.
+            //    The connection should be terminated.
+            std::cerr << "[WS] Handshake failed. Disconnecting." << std::endl;
+            chat_session.disconnect();
         }
     }
-    
-    void send_current_stats(qb::http::ws::Session* session) {
-        qb::json stats = {
-            {"type", "welcome"},
-            {"message", "Connected to real-time data stream"},
-            {"update_interval", "1 second"}
-        };
-        
-        qb::http::ws::MessageText welcome(stats.dump());
-        session->send(welcome);
-    }
 };
+```
+This pattern provides excellent separation of concerns, making your application more modular and scalable.
+
+## WebSocket Clients
+
+`qbm-ws` provides two convenient ways to create clients.
+
+### 1. The Simple Way: Callback-Based Client
+
+The `qb::http::ws::client` provides a clean, modern API using method chaining and lambdas. This is perfect for most use cases and can be used in a standalone `qb-io` application without the full `qb::Main` engine.
+
+```cpp
+#include <ws/ws.h>
+#include <qb/io/async.h> // For pure async mode
+#include <iostream>
 
 int main() {
-    qb::Main engine;
-    engine.addActor<DataStreamServer>(0);
-    engine.start();
+    // Initialize the thread-local async listener.
+    qb::io::async::init();
+
+    // Use client_secure for wss://
+    qb::http::ws::client ws_client;
+
+    // Configure callbacks using method chaining
+    ws_client.on_connected([&](auto &event) {
+        std::cout << "✓ Connected to WebSocket!" << std::endl;
+        qb::http::ws::MessageText msg;
+        msg << "Hello from callback client!";
+        ws_client << msg;
+    })
+    .on_message([](auto &event) {
+        std::cout << "Received: " << std::string_view(event.data, event.size) << std::endl;
+        // For this example, close after one message.
+        ws_client.disconnect();
+    })
+    .on_disconnected([](auto &event) {
+        std::cout << "✗ Disconnected." << std::endl;
+        // Stop the event loop.
+        qb::io::async::break_parent();
+    });
+
+    // Connect to the server
+    ws_client.connect({"ws://localhost:8080/"});
+
+    // Run the event loop. This is a blocking call.
+    qb::io::async::run();
+
+    std::cout << "Event loop finished." << std::endl;
     return 0;
 }
 ```
 
-### WebSocket Client
+### 2. The Advanced Way: Inheritance-Based Client
+
+For more complex clients that need to maintain state, you can inherit from `qb::http::ws::WebSocket`.
 
 ```cpp
 #include <ws/ws.h>
 #include <qb/main.h>
-#include <qb/json.h>
+#include <iostream>
 
-class WebSocketClient : public qb::Actor {
-    qb::http::ws::Client _client;
-    
+// Your class must inherit from WebSocket<YourClass>
+class MyClient : public qb::Actor, public qb::http::ws::WebSocket<MyClient> {
 public:
-    WebSocketClient() : _client("ws://localhost:8080/chat") {}
-    
     bool onInit() override {
-        // Connect to WebSocket server
-        _client.connect([this](bool success, const std::string& error) {
-            if (success) {
-                qb::io::cout() << "Connected to WebSocket server!" << std::endl;
-                setup_handlers();
-                send_initial_message();
-            } else {
-                qb::io::cout() << "Connection failed: " << error << std::endl;
-                kill();
-            }
-        });
-        
+        // Connect to the server
+        this->connect({"ws://localhost:8080/ws"});
         return true;
     }
-    
-private:
-    void setup_handlers() {
-        _client.on_message([this](const qb::http::ws::Message& message) {
-            if (message.is_text()) {
-                try {
-                    auto data = qb::json::parse(message.get_text());
-                    qb::io::cout() << "Received: " << data.dump(2) << std::endl;
-                } catch (const std::exception& e) {
-                    qb::io::cout() << "Received text: " << message.get_text() << std::endl;
-                }
-            }
-        });
-        
-        _client.on_close([this](int code, const std::string& reason) {
-            qb::io::cout() << "Connection closed: " << code << " - " << reason << std::endl;
-            kill();
-        });
-        
-        _client.on_error([this](const std::string& error) {
-            qb::io::cout() << "WebSocket error: " << error << std::endl;
-        });
+
+    // Callback for when the WebSocket is fully connected after handshake.
+    void on(connected &&event) {
+        std::cout << "✓ WebSocket connection established." << std::endl;
+
+        qb::http::ws::MessageText msg;
+        msg << "Hello from inheritance client!";
+        *this << msg;
     }
-    
-    void send_initial_message() {
-        qb::json message = {
-            {"type", "message"},
-            {"user", "QB Client"},
-            {"message", "Hello from QB WebSocket client!"}
-        };
-        
-        qb::http::ws::MessageText text_msg(message.dump());
-        _client.send(text_msg);
-        
-        // Schedule more messages
-        schedule_periodic_messages();
+
+    void on(message &&event) {
+        std::string_view received(event.data, event.size);
+        std::cout << "Received: " << received << std::endl;
+        this->kill(); // Exit after one message
     }
-    
-    void schedule_periodic_messages() {
-        qb::io::async::callback([this]() {
-            static int counter = 1;
-            
-            qb::json message = {
-                {"type", "message"},
-                {"user", "QB Client"},
-                {"message", "Automated message #" + std::to_string(counter++)}
-            };
-            
-            qb::http::ws::MessageText text_msg(message.dump());
-            _client.send(text_msg);
-            
-            if (counter <= 5) {
-                schedule_periodic_messages(); // Send 5 messages total
-            } else {
-                // Close connection after sending messages
-                qb::io::async::callback([this]() {
-                    _client.close();
-                }, 2.0); // Wait 2 seconds before closing
-            }
-        }, 3.0); // Send every 3 seconds
+
+    void on(disconnected &&event) {
+        std::cout << "✗ TCP connection lost." << std::endl;
+        this->kill();
     }
 };
 
 int main() {
     qb::Main engine;
-    engine.addActor<WebSocketClient>(0);
+    engine.addActor<MyClient>(0);
     engine.start();
+    engine.join();
     return 0;
 }
 ```
 
 ## Secure WebSockets (WSS)
 
+Enabling secure communication is straightforward.
+
+### Server-Side
+
+Simply listen on a `wss://` URI and provide your certificate and key files. `qbm-http` handles the rest. This requires a `server` that uses a secure transport, typically by inheriting from `qb::http::use<...>::ssl::server`.
+
 ```cpp
-#include <http/http.h>
-#include <ws/ws.h>
-#include <qb/main.h>
-
-class SecureWebSocketServer : public qb::Actor, public qb::http::ssl::Server<> {
-public:
-    SecureWebSocketServer(const std::string& cert_path, const std::string& key_path) 
-        : _cert_path(cert_path), _key_path(key_path) {}
-    
-    bool onInit() override {
-        // Configure SSL
-        auto ssl_ctx = qb::io::ssl::create_server_context();
-        if (!configure_ssl_context(ssl_ctx)) {
-            return false;
-        }
-        
-        // WebSocket endpoint
-        router().get("/secure", [this](auto ctx) {
-            upgrade_to_secure_websocket(ctx);
-        });
-        
-        router().compile();
-        
-        if (listen({"https://0.0.0.0:8443"}, ssl_ctx)) {
-            start();
-            qb::io::cout() << "Secure WebSocket server running on wss://localhost:8443/secure" << std::endl;
-        }
-        
-        return true;
-    }
-    
-private:
-    std::string _cert_path, _key_path;
-    
-    bool configure_ssl_context(SSL_CTX* ctx) {
-        if (SSL_CTX_use_certificate_file(ctx, _cert_path.c_str(), SSL_FILETYPE_PEM) <= 0) {
-            qb::io::cout() << "Failed to load certificate" << std::endl;
-            return false;
-        }
-        
-        if (SSL_CTX_use_PrivateKey_file(ctx, _key_path.c_str(), SSL_FILETYPE_PEM) <= 0) {
-            qb::io::cout() << "Failed to load private key" << std::endl;
-            return false;
-        }
-        
-        return true;
-    }
-    
-    void upgrade_to_secure_websocket(std::shared_ptr<qb::http::Context<qb::http::ssl::DefaultSession>> ctx) {
-        ctx->switch_protocol<qb::http::ws::protocol>([](auto ws_session) {
-            qb::io::cout() << "Secure WebSocket connection established" << std::endl;
-            
-            ws_session->on_message([](const std::string& message) {
-                qb::io::cout() << "Secure message received: " << message << std::endl;
-                
-                // Echo back with security info
-                qb::http::ws::MessageText reply("Secure echo: " + message);
-                ws_session->send(reply);
-            });
-        });
-    }
-};
-
-int main(int argc, char* argv[]) {
-    if (argc < 3) {
-        std::cerr << "Usage: " << argv[0] << " <cert.pem> <key.pem>" << std::endl;
-        return 1;
-    }
-    
-    qb::Main engine;
-    engine.addActor<SecureWebSocketServer>(0, argv[1], argv[2]);
-    engine.start();
-    return 0;
-}
+// In your server's onInit()
+// This requires an SSL-enabled server transport.
+listen({"wss://0.0.0.0:8443"}, "path/to/cert.pem", "path/to/key.pem");
 ```
 
-## Features
+### Client-Side
 
-**RFC 6455 Compliance**: Complete WebSocket protocol implementation with proper handshake, framing, and message types.
+Use the `qb::http::ws::client_secure` alias or the `qb::http::ws::WebSocketSecure` template and connect to a `wss://` URI.
 
-**Message Types**: Support for text, binary, ping, pong, and close frames with automatic handling.
+```cpp
+// Callback-based secure client
+qb::http::ws::client_secure secure_client;
+secure_client.connect({"wss://example.com/secure"});
 
-**Connection Management**: Automatic connection lifecycle management with proper cleanup.
+// Inheritance-based secure client
+class MySecureClient : public qb::Actor, public qb::http::ws::WebSocketSecure<MySecureClient> {
+    // ... same implementation ...
+};
+```
 
-**Security**: Full SSL/TLS support for secure WebSocket connections (WSS).
+## Key Features
 
-**Performance**: Built on QB's asynchronous I/O for handling thousands of concurrent connections.
-
-**Error Handling**: Comprehensive error reporting and connection state management.
+-   **Protocol Support**: Complete RFC 6455 implementation with text/binary messages, fragmentation, and all control frames (ping, pong, close).
+-   **Seamless Integration**: Designed to extend `qbm-http`, allowing WebSocket and HTTP/API endpoints to coexist on the same port.
+-   **Flexible Architecture**: Supports both simple, self-contained servers and advanced, decoupled architectures for maximum maintainability.
+-   **Dual Client APIs**: Provides a simple callback-based client for rapid development and a powerful inheritance-based client for complex, stateful applications.
+-   **Performance**: Leverages QB's non-blocking, actor-based core to handle a massive number of concurrent connections efficiently.
+-   **Security**: Out-of-the-box support for secure WebSocket (WSS) connections via TLS.
 
 ## Build Information
 
-### Requirements
-- **QB Framework**: This module requires the QB Actor Framework as its foundation
-- **qbm-http**: WebSocket depends on HTTP for the initial handshake
-- **C++17** compatible compiler
-- **CMake 3.14+**
+### Prerequisites
+
+-   **QB Framework**: This module requires the core QB Actor Framework.
+-   **`qbm-http`**: The WebSocket module is an extension of the HTTP module and depends on it.
+-   **C++17** compatible compiler (GCC 7+, Clang 6+, MSVC 2017+).
+-   **CMake 3.14+**.
 
 ### Optional Dependencies
-- **OpenSSL**: For secure WebSocket connections (WSS). Enable with `QB_IO_WITH_SSL=ON` when building QB
 
-### Building with QB
-When using the QB project template, simply add both modules as shown in the integration section above. The `qb_load_modules()` function will automatically handle the configuration.
-
-### Manual Build (Advanced)
-```cmake
-# If building outside QB framework context
-find_package(qb REQUIRED)
-target_link_libraries(your_target PRIVATE qb::qbm-http qb::qbm-ws)
-```
-
-## Advanced Documentation
-
-For comprehensive technical documentation, implementation details, and in-depth guides:
-
-**📖 [Complete WebSocket Module Documentation](./readme/README.md)**
-
-This detailed documentation covers:
-- **[Core Concepts](./readme/concepts.md)** - WebSocket fundamentals, connection lifecycle, and actor integration
-- **[Protocol Implementation](./readme/protocol.md)** - RFC 6455 compliance, framing, masking, and message types
-- **[Handshake Process](./readme/handshake.md)** - HTTP upgrade mechanism, headers validation, and security considerations
-- **[Usage Patterns](./readme/usage.md)** - Common implementation patterns, client/server examples, and best practices
-
-The advanced documentation provides:
-- **Protocol Details** - Complete RFC 6455 implementation specifics
-- **Security Considerations** - WebSocket security, WSS setup, and origin validation
-- **Performance Optimization** - Connection pooling, message batching, and memory management
-- **Error Handling** - Connection failures, protocol errors, and recovery strategies
-- **Integration Patterns** - Combining with HTTP routes, middleware, and authentication
-- **Real-time Applications** - Chat systems, live data feeds, and notification services
+-   **OpenSSL**: **Required** for all WebSocket functionality, as it is used for the SHA1 hashing in the handshake. Must be enabled in the core `qb-io` build with `QB_IO_WITH_SSL=ON`.
 
 ## Documentation & Examples
 
-For comprehensive examples and detailed usage patterns:
+For complete examples and detailed usage patterns, please see the `examples/` directory within this module.
 
-- **[QB Examples Repository](https://github.com/isndev/qb-examples):** Real-world WebSocket integration patterns
-- **[Full Module Documentation](./readme/README.md):** Complete API reference and guides
+-   **`examples/qbm/ws/01_chat_server.cpp`**: A complete, production-ready chat application demonstrating the advanced separated-server architecture.
+-   **`examples/qbm/ws/02_chat_client.cpp`**: A command-line client for the chat server.
 
-**Example Categories:**
-- Basic WebSocket servers and clients
-- Real-time chat applications
-- Live data streaming
-- Secure WebSocket (WSS) setup
-- Integration with HTTP servers
-- Connection management patterns
+## Detailed Documentation
 
-## Contributing
+For comprehensive technical documentation, implementation details, and in-depth guides on the concepts and protocol implementation:
 
-We welcome contributions! Please see the main [QB Contributing Guidelines](https://github.com/isndev/qb/blob/master/CONTRIBUTING.md) for details.
-
-## License
-
-Licensed under the Apache License, Version 2.0. See [LICENSE](./LICENSE) for details.
+**📖 [View the Detailed `qbm-ws` Documentation](./readme/README.md)**
 
 ---
 
