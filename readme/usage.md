@@ -1,6 +1,6 @@
-# `qbm-ws`: Usage Guide
+# `qbm-websocket`: Usage Guide
 
-This guide provides practical examples on how to use the `qbm-ws` module to build WebSocket clients and servers within the QB Actor Framework.
+This guide provides practical examples on how to use the `qbm-websocket` module to build WebSocket clients and servers within the QB Actor Framework.
 
 ## 1. Building a WebSocket Server
 
@@ -152,7 +152,7 @@ public:
 
 ## 2. Building a WebSocket Client
 
-The `qbm-ws` module provides the `qb::http::ws::WebSocket<T>` class template (`WebSocketSecure<T>` for WSS) to simplify client creation.
+The `qbm-websocket` module provides the `qb::http::ws::WebSocket<T>` class template (`WebSocketSecure<T>` for WSS) to simplify client creation.
 
 **Steps:**
 

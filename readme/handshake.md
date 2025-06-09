@@ -1,6 +1,6 @@
-# `qbm-ws`: Handshake Process
+# `qbm-websocket`: Handshake Process
 
-This document details the WebSocket handshake process as handled by the `qbm-http` and `qbm-ws` modules.
+This document details the WebSocket handshake process as handled by the `qbm-http` and `qbm-websocket` modules.
 
 ## Overview
 
@@ -27,7 +27,7 @@ Origin: http://example.com
 *   `Upgrade: websocket`: Declares the desired protocol is WebSocket.
 *   `Connection: Upgrade`: Signals that this is an upgrade request.
 *   `Sec-WebSocket-Key`: A **required**, randomly generated, 16-byte nonce, Base64 encoded. This key is *not* for security in the sense of authentication, but to prove that the server is a WebSocket-aware server and not an unsuspecting HTTP server.
-*   `Sec-WebSocket-Version: 13`: Specifies the WebSocket protocol version the client wishes to use. Version 13 is the standard defined by RFC 6455 and the only version supported by `qbm-ws`.
+*   `Sec-WebSocket-Version: 13`: Specifies the WebSocket protocol version the client wishes to use. Version 13 is the standard defined by RFC 6455 and the only version supported by `qbm-websocket`.
 *   `Origin` (Optional but common): Indicates the origin of the script initiating the connection (important for browser security).
 *   `Sec-WebSocket-Protocol` (Optional): A comma-separated list of subprotocols the client is willing to use.
 *   `Sec-WebSocket-Extensions` (Optional): A comma-separated list of extensions the client wants to use.

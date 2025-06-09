@@ -1,4 +1,4 @@
-# QB WebSocket Module (`qbm-ws`)
+# QB WebSocket Module (`qbm-websocket`)
 
 **RFC 6455 Compliant WebSocket Implementation for the QB Actor Framework**
 
@@ -11,9 +11,9 @@
   <img src="https://img.shields.io/badge/License-Apache%202.0-green.svg" alt="License"/>
 </p>
 
-`qbm-ws` extends the `qbm-http` module to provide production-ready WebSocket support, enabling real-time bidirectional communication. Built on top of QB's asynchronous I/O foundations, it offers high-performance WebSocket capabilities that integrate seamlessly with HTTP servers and clients.
+`qbm-websocket` extends the `qbm-http` module to provide production-ready WebSocket support, enabling real-time bidirectional communication. Built on top of QB's asynchronous I/O foundations, it offers high-performance WebSocket capabilities that integrate seamlessly with HTTP servers and clients.
 
-Whether you're building chat applications, real-time data streaming, or collaborative tools, `qbm-ws` provides the foundation you need with minimal complexity.
+Whether you're building chat applications, real-time data streaming, or collaborative tools, `qbm-websocket` provides the foundation you need with minimal complexity.
 
 ## Quick Integration with QB
 
@@ -22,7 +22,7 @@ Whether you're building chat applications, real-time data streaming, or collabor
 ```bash
 # Add HTTP and WebSocket modules as submodules
 git submodule add https://github.com/isndev/qbm-http qbm/http
-git submodule add https://github.com/isndev/qbm-ws qbm/ws
+git submodule add https://github.com/isndev/qbm-websocket qbm/ws
 ```
 
 ### CMake Configuration
@@ -37,7 +37,7 @@ qb_load_modules("${CMAKE_CURRENT_SOURCE_DIR}/qbm")
 
 # Link with HTTP and WebSocket modules
 # qbm::http is required as a dependency
-target_link_libraries(your_target PRIVATE qbm::http qbm::ws)
+target_link_libraries(your_target PRIVATE qbm::http qbm::websocket)
 ```
 
 ### Include and Usage
@@ -47,7 +47,7 @@ target_link_libraries(your_target PRIVATE qbm::http qbm::ws)
 #include <ws/ws.h>       // WebSocket protocol implementation
 ```
 
-## Why Choose `qbm-ws`?
+## Why Choose `qbm-websocket`?
 
 -   **RFC 6455 Compliant**: Complete WebSocket protocol implementation including handshake, framing, masking, and all control frames.
 -   **Seamless HTTP Integration**: Effortlessly upgrades standard HTTP connections to WebSocket, leveraging the power of `qbm-http`.
@@ -59,7 +59,7 @@ target_link_libraries(your_target PRIVATE qbm::http qbm::ws)
 
 WebSockets begin their life as a standard HTTP `GET` request containing special `Upgrade` headers. The server responds with a `101 Switching Protocols` status, and from that moment, the underlying TCP connection is repurposed for the WebSocket binary framing protocol.
 
-`qbm-ws` manages this handshake gracefully. An HTTP server receives the upgrade request, and then "hands over" the connection's I/O transport to a WebSocket protocol handler. This allows for incredible flexibility, such as running a REST API and a WebSocket service on the same port.
+`qbm-websocket` manages this handshake gracefully. An HTTP server receives the upgrade request, and then "hands over" the connection's I/O transport to a WebSocket protocol handler. This allows for incredible flexibility, such as running a REST API and a WebSocket service on the same port.
 
 ## Your First WebSocket Server in 60 Seconds
 
@@ -148,7 +148,7 @@ int main() {
 
 ## Advanced Architecture: Integrating with an HTTP Server
 
-For applications that need to serve both a standard HTTP/REST API and a WebSocket service on the same port, `qbm-ws` integrates seamlessly with `qbm-http`. This is the recommended pattern for production.
+For applications that need to serve both a standard HTTP/REST API and a WebSocket service on the same port, `qbm-websocket` integrates seamlessly with `qbm-http`. This is the recommended pattern for production.
 
 The key is separating responsibilities:
 1.  An **HttpServer Actor** handles all HTTP traffic using the `qb::http::Router`. When a request comes to `/ws`, it...
@@ -254,7 +254,7 @@ This pattern provides excellent separation of concerns, making your application 
 
 ## WebSocket Clients
 
-`qbm-ws` provides two convenient ways to create clients.
+`qbm-websocket` provides two convenient ways to create clients.
 
 ### 1. The Simple Way: Callback-Based Client
 
@@ -411,7 +411,7 @@ For complete examples and detailed usage patterns, please see the `examples/` di
 
 For comprehensive technical documentation, implementation details, and in-depth guides on the concepts and protocol implementation:
 
-**📖 [View the Detailed `qbm-ws` Documentation](./readme/README.md)**
+**📖 [View the Detailed `qbm-websocket` Documentation](./readme/README.md)**
 
 ---
 

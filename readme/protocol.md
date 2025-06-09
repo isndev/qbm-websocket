@@ -1,4 +1,4 @@
-# `qbm-ws`: WebSocket Protocol Handler
+# `qbm-websocket`: WebSocket Protocol Handler
 
 This document describes the `qb::http::ws::protocol` class (found indirectly via `ws.h`, defined within `qb::protocol::ws_internal::base` and specialized wrappers `ws_server`/`ws_client`), which is responsible for parsing and handling WebSocket frames after a successful handshake.
 

@@ -1,6 +1,6 @@
-# `qbm-ws`: Core WebSocket Concepts
+# `qbm-websocket`: Core WebSocket Concepts
 
-This document explains the fundamental concepts of the WebSocket protocol (RFC 6455) as implemented in the `qbm-ws` module.
+This document explains the fundamental concepts of the WebSocket protocol (RFC 6455) as implemented in the `qbm-websocket` module.
 
 ## 1. Handshake
 
@@ -75,7 +75,7 @@ The masking process involves XORing each byte of the payload data with a byte fr
 
 ## 5. Message Types (`qb::http::ws::Message`)
 
-The `qbm-ws` module uses a class hierarchy for constructing messages:
+The `qbm-websocket` module uses a class hierarchy for constructing messages:
 
 *   **`qb::http::ws::Message`:** Base class holding the `fin_rsv_opcode`, `masked` flag, and payload data (`_data` which is a `qb::allocator::pipe<char>`).
 *   **`qb::http::ws::MessageText`:** Inherits `Message`, sets opcode to `0x1` (Text).
