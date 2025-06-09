@@ -68,7 +68,7 @@ is_utf8(std::string_view sv) noexcept {
             extra_bytes = 3;
         }
 
-        if (std::distance(it, sv.end()) < extra_bytes) {
+        if (std::distance(it, sv.end()) < static_cast<std::ptrdiff_t>(extra_bytes)) {
             return false; // Not enough bytes left
         }
 
