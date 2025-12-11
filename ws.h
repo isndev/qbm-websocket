@@ -30,7 +30,7 @@
 #pragma once
 
 // WebSocket protocol requires OpenSSL crypto library
-#ifndef QB_IO_WITH_SSL
+#ifndef QB_HAS_SSL
 #error "websocket protocol requires OpenSSL crypto library"
 #endif
 

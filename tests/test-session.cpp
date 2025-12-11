@@ -275,7 +275,7 @@ TEST(Session, WEBSOCKET_OVER_TCP) {
 
 // OVER SECURE TCP
 
-#ifdef QB_IO_WITH_SSL
+#ifdef QB_HAS_SSL
 
 class TestSecureServer;
 

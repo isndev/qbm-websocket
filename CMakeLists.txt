@@ -17,24 +17,30 @@
 
 project(qbm-websocket)
 
-if (NOT QB_FOUND)
-    message(STATUS "qb project not found, skipping Websocket module")
+# Check if qb framework is available
+if(NOT QB_FOUND)
+    qb_status_message("qb framework not found, skipping WebSocket module")
     return()
-endif ()
+endif()
 
-if (NOT OPENSSL_FOUND OR NOT QB_IO_WITH_SSL)
-    message(INFO: qbm-websocket will not be loaded, missing openssl)
+# Check if SSL support is available
+if(NOT QB_HAS_SSL)
+    qb_status_message("WebSocket module requires SSL support - skipping")
     return()
-endif ()
+endif()
 
+# Register the WebSocket module using the new framework functions
 qb_register_module(
-        NAME websocket
-        VERSION 1.0.0
-        DEPENDENCIES qbm-http
-        SOURCES ws.cpp
+    NAME websocket
+    VERSION 1.0.0
+    DEPENDS qbm-http
+    SOURCES
+        ws.cpp
+    DEFINES
+        QBM_WEBSOCKET_VERSION=1.0.0
 )
 
-if (QB_BUILD_TEST)
-    enable_testing()
+# Add tests if enabled
+if(QB_BUILD_TESTS)
     add_subdirectory(tests)
-endif ()
+endif()
