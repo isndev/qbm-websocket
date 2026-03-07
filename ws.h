@@ -794,13 +794,13 @@ class tcp;
  * @tparam T Parent class type that will receive event notifications
  * @tparam Transport Transport layer implementation (TCP by default or secure TCP)
  */
-template <typename T, typename Transport = io::transport::tcp>
+template <typename T, typename Transport = ::qb::io::transport::tcp>
 class WebSocket
-    : public io::async::tcp::client<WebSocket<T, Transport>, Transport>
-    , public io::use<WebSocket<T, Transport>>::timeout {
+    : public ::qb::io::async::tcp::client<WebSocket<T, Transport>, Transport>
+    , public ::qb::io::use<WebSocket<T, Transport>>::timeout {
     const std::string _ws_key;        /**< WebSocket handshake key */
     int               _ping_interval; /**< Interval for sending ping frames (in ms) */
-    io::uri           _remote;        /**< Remote server URI */
+    ::qb::io::uri     _remote;        /**< Remote server URI */
 
 private:
     T& derived() noexcept { return *static_cast<T*>(this); }
@@ -836,8 +836,8 @@ public:
     using ping    = typename ws_protocol::ping;    /**< Ping message received event */
     using pong    = typename ws_protocol::pong;    /**< Pong message received event */
     using message = typename ws_protocol::message; /**< Data message received event */
-    using disconnected = io::async::event::disconnected; /**< TCP disconnection event */
-    using timeout      = io::async::event::timeout;      /**< Timeout event for pings */
+    using disconnected = ::qb::io::async::event::disconnected; /**< TCP disconnection event */
+    using timeout      = ::qb::io::async::event::timeout;      /**< Timeout event for pings */
 
 public:
     /**
@@ -874,11 +874,11 @@ public:
      * performing the WebSocket handshake.
      */
     void
-    connect(io::uri const &remote, int timeout = 0) {
+    connect(::qb::io::uri const &remote, int timeout = 0) {
         this->clear_protocols();
         this->setTimeout(0);
         _remote = remote;
-        io::async::tcp::connect<typename Transport::transport_io_type>(
+        ::qb::io::async::tcp::connect<typename Transport::transport_io_type>(
             remote,
             [this](auto &&transport) {
                 if (!transport.is_open()) {
@@ -1021,7 +1021,7 @@ public:
                 msg.masked = false; // Ensure control frames are not masked
             }
         }
-        io::async::tcp::client<WebSocket<T, Transport>, Transport>::operator<<(std::forward<ToSend>(msg));
+        ::qb::io::async::tcp::client<WebSocket<T, Transport>, Transport>::operator<<(std::forward<ToSend>(msg));
         return *this;
     }
 };
@@ -1034,7 +1034,7 @@ public:
  * transport (TLS/SSL) for encrypted connections.
  */
 template <typename T>
-using WebSocketSecure = WebSocket<T, io::transport::stcp>;
+using WebSocketSecure = WebSocket<T, ::qb::io::transport::stcp>;
 
 /**
  * @class Client
@@ -1046,7 +1046,7 @@ using WebSocketSecure = WebSocket<T, io::transport::stcp>;
  *
  * @tparam Transport Transport layer implementation (TCP by default or secure TCP)
  */
-template <typename Transport = io::transport::tcp>
+template <typename Transport = ::qb::io::transport::tcp>
 class Client : public WebSocket<Client<Transport>, Transport> {
 public:
     using base_type = WebSocket<Client<Transport>, Transport>;
@@ -1214,10 +1214,10 @@ public:
  * A specialized version of the Client that uses secure
  * transport (TLS/SSL) for encrypted connections.
  */
-using ClientSecure = Client<io::transport::stcp>;
+using ClientSecure = Client<::qb::io::transport::stcp>;
 
-using client = Client<io::transport::tcp>;
-using client_secure = Client<io::transport::stcp>;
+using client = Client<::qb::io::transport::tcp>;
+using client_secure = Client<::qb::io::transport::stcp>;
 
 } // namespace qb::http::ws
 
