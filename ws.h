@@ -41,6 +41,19 @@
 #include <string_view>
 #include "../http/http.h"
 
+// Forward declarations (must be outside qb::http::ws to avoid creating phantom namespaces)
+namespace qb {
+namespace allocator {
+template <typename T>
+class pipe;
+} // namespace allocator
+namespace io {
+namespace transport {
+class tcp;
+} // namespace transport
+} // namespace io
+} // namespace qb
+
 /**
  * @namespace qb::http::ws
  * @brief WebSocket protocol implementation within the HTTP namespace
@@ -78,14 +91,6 @@ enum opcode : unsigned char {
     Ping   = 137, /**< Ping frame (0x89): FIN bit + opcode 0x9 */
     Pong   = 138  /**< Pong frame (0x8A): FIN bit + opcode 0xA */
 };
-
-// Forward declaration
-namespace qb {
-namespace allocator {
-template <typename T>
-class pipe;
-}
-} // namespace qb
 
 /**
  * @struct Message
@@ -371,7 +376,7 @@ class base : public qb::io::async::AProtocol<IO_> {
 
         if (frame_opcode == ::qb::http::ws::opcode::_Close) {
             this->_io.out().reset();
-            if constexpr (has_method_on<IO_, void, close>::value) {
+            if constexpr (qb::has_on<IO_, close>) {
                 this->_io.on(
                     close{current_frame_message.size(),
                           current_frame_message._data.cbegin(),
@@ -382,7 +387,7 @@ class base : public qb::io::async::AProtocol<IO_> {
             }
             this->not_ok();
         } else if (frame_opcode == ::qb::http::ws::opcode::_Ping) {
-            if constexpr (has_method_on<IO_, void, ping>::value) {
+            if constexpr (qb::has_on<IO_, ping>) {
                 this->_io.on(
                     ping{current_frame_message.size(),
                          current_frame_message._data.cbegin(),
@@ -392,7 +397,7 @@ class base : public qb::io::async::AProtocol<IO_> {
             current_frame_message.fin_rsv_opcode = ::qb::http::ws::opcode::Pong;
             this->_io << current_frame_message;
         } else if (frame_opcode == ::qb::http::ws::opcode::_Pong) {
-            if constexpr (has_method_on<IO_, void, pong>::value) {
+            if constexpr (qb::has_on<IO_, pong>) {
                 this->_io.on(
                     pong{current_frame_message.size(),
                          current_frame_message._data.cbegin(),
@@ -688,7 +693,7 @@ public:
                 res.headers()["Sec-WebSocket-Accept"].emplace_back(
                     crypto::base64::encode(crypto::sha1(ws_key)));
 
-                if constexpr (has_method_on<IO_, void, sending_http_response>::value) {
+                if constexpr (qb::has_on<IO_, sending_http_response>) {
                     this->_io.on(sending_http_response{res});
                 }
 
@@ -770,14 +775,6 @@ struct side<IO_, false> {
 template <typename IO_>
 using protocol = typename internal::side<IO_>::protocol;
 
-// Forward declare the transport type
-namespace qb {
-namespace io {
-namespace transport {
-class tcp;
-}
-} // namespace io
-} // namespace qb
 
 /**
  * @class WebSocket
@@ -882,7 +879,7 @@ public:
             remote,
             [this](auto &&transport) {
                 if (!transport.is_open()) {
-                    if constexpr (has_method_on<T, void, error>::value) {
+                    if constexpr (qb::has_on<T, error>) {
                         derived().on(error{});
                     }
                 } else {
@@ -894,7 +891,7 @@ public:
                     request.headers()["host"].emplace_back(std::string(_remote.host()));
                     request.uri() = _remote;
 
-                    if constexpr (has_method_on<T, void, sending_http_request>::value) {
+                    if constexpr (qb::has_on<T, sending_http_request>) {
                         derived().on(sending_http_request{request});
                     }
 
@@ -915,13 +912,13 @@ public:
     void
     on(typename http_protocol::response &&event) {
         if (!this->template switch_protocol<ws_protocol>(*this, event, _ws_key)) {
-            if constexpr (has_method_on<T, void, error>::value) {
+            if constexpr (qb::has_on<T, error>) {
                 derived().on(error{});
             }
             this->disconnect();
             return;
         }
-        if constexpr (has_method_on<T, void, connected>::value) {
+        if constexpr (qb::has_on<T, connected>) {
             derived().on(connected{});
             this->setTimeout(_ping_interval);
         }
@@ -935,7 +932,7 @@ public:
      */
     void
     on(ping &&event) {
-        if constexpr (has_method_on<T, void, ping>::value) {
+        if constexpr (qb::has_on<T, ping>) {
             derived().on(std::forward<ping>(event));
         }
     }
@@ -948,7 +945,7 @@ public:
      */
     void
     on(pong &&event) {
-        if constexpr (has_method_on<T, void, pong>::value) {
+        if constexpr (qb::has_on<T, pong>) {
             derived().on(std::forward<pong>(event));
         }
     }
@@ -972,7 +969,7 @@ public:
      */
     void
     on(closed &&event) {
-        if constexpr (has_method_on<T, void, closed>::value) {
+        if constexpr (qb::has_on<T, closed>) {
             derived().on(std::forward<closed>(event));
         }
     }
