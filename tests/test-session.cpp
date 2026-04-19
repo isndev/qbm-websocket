@@ -75,7 +75,7 @@ class TestServer;
  */
 class TestServerClient : public use<TestServerClient>::tcp::client<TestServer> {
 public:
-    using Protocol    = qb::http::protocol_view<TestServerClient>;
+    using Protocol    = qb::http::protocol<TestServerClient>;
     using WS_Protocol = qb::http::ws::protocol<TestServerClient>;
 
     explicit TestServerClient(IOServer &server)
@@ -161,7 +161,7 @@ class TestClient : public use<TestClient>::tcp::client<> {
     const std::string ws_key;
 
 public:
-    using Protocol    = qb::http::protocol_view<TestClient>;
+    using Protocol    = qb::http::protocol<TestClient>;
     using WS_Protocol = qb::http::ws::protocol<TestClient>;
 
     /**
@@ -294,7 +294,7 @@ class TestSecureServer;
 class TestSecureServerClient
     : public use<TestSecureServerClient>::tcp::ssl::client<TestSecureServer> {
 public:
-    using Protocol    = qb::http::protocol_view<TestSecureServerClient>;
+    using Protocol    = qb::http::protocol<TestSecureServerClient>;
     using WS_Protocol = qb::http::ws::protocol<TestSecureServerClient>;
 
     explicit TestSecureServerClient(IOServer &server)
@@ -377,7 +377,7 @@ class TestSecureClient : public use<TestSecureClient>::tcp::ssl::client<> {
     const std::string ws_key;
 
 public:
-    using Protocol    = qb::http::protocol_view<TestSecureClient>;
+    using Protocol    = qb::http::protocol<TestSecureClient>;
     using WS_Protocol = qb::http::ws::protocol<TestSecureClient>;
 
     /**

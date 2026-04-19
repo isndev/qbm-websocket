@@ -82,7 +82,7 @@ class EchoServer;
  */
 class EchoServerClient : public use<EchoServerClient>::tcp::client<EchoServer> {
 public:
-    using Protocol    = qb::http::protocol_view<EchoServerClient>;
+    using Protocol    = qb::http::protocol<EchoServerClient>;
     using WS_Protocol = qb::http::ws::protocol<EchoServerClient>;
 
     explicit EchoServerClient(IOServer &server)
@@ -173,7 +173,7 @@ private:
     const std::string ws_key;
 
 public:
-    using Protocol    = qb::http::protocol_view<WebSocketTestClient>;
+    using Protocol    = qb::http::protocol<WebSocketTestClient>;
     using WS_Protocol = qb::http::ws::protocol<WebSocketTestClient>;
 
     /**

@@ -68,7 +68,7 @@ private:
         false; ///< Flag indicating whether the client handshake was validated
 
 public:
-    using Protocol    = qb::http::protocol_view<SecurityServerClient>;
+    using Protocol    = qb::http::protocol<SecurityServerClient>;
     using WS_Protocol = qb::http::ws::protocol<SecurityServerClient>;
 
     /**
@@ -213,7 +213,7 @@ private:
     const std::string _ws_key; ///< WebSocket key for handshake
 
 public:
-    using Protocol    = qb::http::protocol_view<ValidClient>;
+    using Protocol    = qb::http::protocol<ValidClient>;
     using WS_Protocol = qb::http::ws::protocol<ValidClient>;
 
     /**
@@ -294,7 +294,7 @@ class InvalidKeyClient
     : public qb::io::use<InvalidKeyClient>::tcp::client<>
     , public qb::io::use<InvalidKeyClient>::timeout {
 public:
-    using Protocol = qb::http::protocol_view<InvalidKeyClient>;
+    using Protocol = qb::http::protocol<InvalidKeyClient>;
 
     /**
      * @brief Construct a new InvalidKeyClient
@@ -389,7 +389,7 @@ private:
     const std::string _ws_key; ///< WebSocket key for handshake
 
 public:
-    using Protocol = qb::http::protocol_view<InvalidVersionClient>;
+    using Protocol = qb::http::protocol<InvalidVersionClient>;
 
     /**
      * @brief Construct a new InvalidVersionClient
@@ -489,7 +489,7 @@ private:
         false; ///< Flag indicating if handshake completed successfully
 
 public:
-    using Protocol    = qb::http::protocol_view<UnmaskedFrameClient>;
+    using Protocol    = qb::http::protocol<UnmaskedFrameClient>;
     using WS_Protocol = qb::http::ws::protocol<UnmaskedFrameClient>;
 
     /**

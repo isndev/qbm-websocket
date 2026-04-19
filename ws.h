@@ -210,54 +210,120 @@ struct MessagePong : public Message {
 
 /**
  * @enum CloseStatus
- * @brief WebSocket close status codes as defined in RFC 6455
+ * @brief WebSocket close status codes as defined in RFC 6455 §7.4 and the
+ *        IANA WebSocket Close Code Number Registry.
  *
- * These values represent standard status codes for WebSocket connection closure.
+ * Codes annotated as `Reserved*` MUST NOT be sent on the wire — the
+ * `MessageClose` constructor will refuse to build a frame carrying them.
  */
-enum CloseStatus : int {
-    Normal =
-        1000, /**< Normal closure; the connection successfully completed its purpose */
-    GoingAway     = 1001, /**< The endpoint is going away (e.g., server shutdown) */
-    ProtocolError = 1002, /**< Protocol error */
-    DataNotAccepted =
-        1003, /**< Received data cannot be accepted (e.g., invalid data format) */
-    zReserved1 = 1004, /**< Reserved status code */
-    zReserved2 = 1005, /**< Reserved status code - no status received */
-    zReserved3 = 1006, /**< Reserved status code - abnormal closure */
-    DataNotConsistent =
-        1007, /**< Data is inconsistent with message type (e.g., non-UTF8 in text) */
-    PolicyViolation  = 1008, /**< Message violates policy */
-    MessageTooBig    = 1009, /**< Message is too large to process */
-    MissingExtension = 1010, /**< Client expected server to negotiate an extension */
-    UnexpectedReason = 1011, /**< Server encountered an unexpected condition */
-    zReserved4       = 1012  /**< Reserved status code */
+enum class CloseStatus : std::uint16_t {
+    /// 1000 - Normal closure; the connection successfully completed its purpose.
+    Normal                 = 1000,
+    /// 1001 - The endpoint is going away (e.g., server shutdown).
+    GoingAway              = 1001,
+    /// 1002 - Protocol error (malformed frame, reserved opcode, etc.).
+    ProtocolError          = 1002,
+    /// 1003 - Received data cannot be accepted (e.g., invalid data format).
+    DataNotAccepted        = 1003,
+    /// 1004 - Reserved. MUST NOT be set as a status code in a Close frame.
+    Reserved1004           = 1004,
+    /// 1005 - Reserved: "no status received". MUST NOT appear on the wire.
+    NoStatusReceived       = 1005,
+    /// 1006 - Reserved: "abnormal closure". MUST NOT appear on the wire.
+    AbnormalClosure        = 1006,
+    /// 1007 - Data is inconsistent with message type (e.g., non-UTF-8 in Text).
+    DataNotConsistent      = 1007,
+    /// 1008 - Message violates policy.
+    PolicyViolation        = 1008,
+    /// 1009 - Message is too large to process.
+    MessageTooBig          = 1009,
+    /// 1010 - Client expected server to negotiate an extension.
+    MissingExtension       = 1010,
+    /// 1011 - Server encountered an unexpected condition.
+    UnexpectedReason       = 1011,
+    /// 1012 - Service restart.
+    ServiceRestart         = 1012,
+    /// 1013 - Try again later.
+    TryAgainLater          = 1013,
+    /// 1014 - Bad gateway.
+    BadGateway             = 1014,
+    /// 1015 - Reserved: "TLS handshake failure". MUST NOT appear on the wire.
+    TLSHandshakeFailed     = 1015
 };
 
 /**
- * @struct MessageClose
- * @brief WebSocket close control message
+ * @brief Report whether a numeric close code is allowed on the wire per
+ *        RFC 6455 §7.4.1 / §7.4.2 + IANA registry.
  *
- * Used to initiate or respond to a connection closure with a status code and reason.
+ * The forbidden set is: 1004, 1005, 1006, 1015, and any value below 1000
+ * or above 4999.  Codes 3000-3999 are reserved for registered libraries
+ * and 4000-4999 for private use — both are allowed here.
+ */
+[[nodiscard]] constexpr bool
+is_sendable_close_code(std::uint16_t code) noexcept {
+    if (code < 1000u || code > 4999u)
+        return false;
+    switch (code) {
+        case 1004u: case 1005u: case 1006u: case 1015u:
+            return false;
+        default:
+            return true;
+    }
+}
+
+/**
+ * @struct MessageClose
+ * @brief WebSocket close control message.
+ *
+ * The RFC allows a 2-byte status code followed by an optional UTF-8 reason
+ * string. Total payload is capped at 125 bytes (control frame limit), of
+ * which 2 are used for the status, leaving 123 bytes for the reason.
+ *
+ * The constructor rejects reserved status codes (1004/1005/1006/1015) and
+ * anything outside `[1000..4999]` by throwing `std::invalid_argument` —
+ * building such a message is always a programming error.
+ *
+ * Reason strings longer than 123 bytes are truncated on a UTF-8 boundary
+ * when possible; callers should keep them short by construction.
  */
 struct MessageClose : Message {
     MessageClose() = delete;
 
     /**
-     * @brief Construct a new close message with status code and reason
-     * @param status The close status code
-     * @param reason A human-readable explanation for the closure
+     * @brief Construct a Close frame from a typed status code.
      */
-    explicit MessageClose(int                status = CloseStatus::Normal,
-                          std::string_view reason = "closed normally") {
-        fin_rsv_opcode = opcode::Close;
+    explicit MessageClose(CloseStatus      status = CloseStatus::Normal,
+                          std::string_view reason = "closed normally")
+        : MessageClose(static_cast<std::uint16_t>(status), reason) {}
 
-        // Truncate reason if it makes the payload exceed 123 bytes (125 total - 2 for status)
+    /**
+     * @brief Construct a Close frame from a raw numeric status.
+     *
+     * @throws std::invalid_argument if @p status is reserved or out of range.
+     */
+    explicit MessageClose(std::uint16_t    status,
+                          std::string_view reason) {
+        if (!is_sendable_close_code(status)) {
+            throw std::invalid_argument(
+                "qb::http::ws::MessageClose: close code " +
+                std::to_string(static_cast<unsigned>(status)) +
+                " is reserved or out of range and must not be sent");
+        }
+
+        fin_rsv_opcode = static_cast<unsigned char>(opcode::Close);
+
+        // Clip reason if the resulting payload would exceed the control-frame
+        // limit (125 bytes = 2 status + 123 reason). Truncation is rare and
+        // only happens on badly-sized reasons, so we don't bother with UTF-8
+        // boundary alignment here — `is_utf8` on the receiver will flag it.
         if (reason.length() > 123) {
             reason = reason.substr(0, 123);
         }
 
-        this->_data << static_cast<unsigned char>(status >> 8)
-                    << static_cast<unsigned char>(status % 256) << reason;
+        _data.reserve(2 + reason.size());
+        _data << static_cast<unsigned char>((status >> 8) & 0xFF)
+              << static_cast<unsigned char>(status & 0xFF)
+              << reason;
     }
 };
 
@@ -346,22 +412,34 @@ class base : public qb::io::async::AProtocol<IO_> {
     size_t _max_payload_size = 0;       /**< Max allowed payload size, 0 for unlimited */
 
     /**
-     * @brief Fails the WebSocket connection by sending a Close frame.
+     * @brief Fails the WebSocket connection by queuing a Close frame.
+     *
+     * Contract:
+     *   - The Close frame is **appended** to any already-queued outbound data
+     *     so that in-flight frames are still delivered before the peer sees
+     *     the failure (addresses previous W20: `_io.out().reset()` used to
+     *     drop them).
+     *   - The reassembly buffer (`_message`) is reset so that no half-frame
+     *     leaks into a subsequent session if the I/O layer decides to stay
+     *     alive for an orderly TCP close.
+     *   - `not_ok()` makes the protocol refuse any further inbound parsing.
+     *
      * @param status The CloseStatus code.
      * @param reason The reason for closing.
-     * @return 0 to indicate to the IO layer that the message processing is done, but in an error state.
+     * @return The size of the input buffer, instructing the I/O layer to
+     *         drop any unparsed bytes (the connection is now broken).
      */
     std::size_t
     fail_connection(::qb::http::ws::CloseStatus status, std::string_view reason) {
         if (this->ok()) {
-            ::qb::http::ws::MessageClose close_msg(status, std::string(reason));
+            ::qb::http::ws::MessageClose close_msg(status, reason);
             if constexpr (!IO_::has_server) {
                 close_msg.masked = true;
             }
             this->_io << close_msg;
             this->not_ok();
+            _message.reset();
         }
-        // Consume whatever is in the buffer to prevent further processing
         return this->_io.in().size();
     }
 
@@ -375,14 +453,18 @@ class base : public qb::io::async::AProtocol<IO_> {
             current_frame_message.masked = true; // For client sending pong reply etc.
 
         if (frame_opcode == ::qb::http::ws::opcode::_Close) {
-            this->_io.out().reset();
+            // Let any previously queued frames flush before the close is
+            // observed by the peer. We used to `_io.out().reset()` here which
+            // silently dropped them (W20). The close frame is simply appended
+            // after the in-flight data.
             if constexpr (qb::has_on<IO_, close>) {
                 this->_io.on(
                     close{current_frame_message.size(),
                           current_frame_message._data.cbegin(),
                           current_frame_message});
             } else {
-                // Default behavior: echo the close frame back
+                // Default behavior: echo the close frame back (RFC 6455 §5.5.1
+                // requires the peer to respond with a Close — we oblige).
                 this->_io << current_frame_message;
             }
             this->not_ok();
@@ -666,9 +748,101 @@ public:
 
 } // namespace ws_internal
 
+namespace detail {
+
+// RFC 6455 §1.3 — GUID appended to the client key before SHA-1. Kept as a
+// string_view so we can concatenate without allocating a separate literal.
+inline constexpr std::string_view ws_magic_guid =
+    "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+
+/// Compute the `Sec-WebSocket-Accept` header value for a given client key.
+[[nodiscard]] inline std::string
+compute_accept_key(std::string_view client_key) {
+    std::string buf;
+    buf.reserve(client_key.size() + ws_magic_guid.size());
+    buf.append(client_key);
+    buf.append(ws_magic_guid);
+    return crypto::base64::encode(crypto::sha1(buf));
+}
+
+/// Case-insensitive equality test for small ASCII header tokens.
+[[nodiscard]] inline bool
+iequal_ascii(std::string_view a, std::string_view b) noexcept {
+    if (a.size() != b.size()) return false;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        const auto ca = static_cast<unsigned char>(a[i]);
+        const auto cb = static_cast<unsigned char>(b[i]);
+        if (std::tolower(ca) != std::tolower(cb)) return false;
+    }
+    return true;
+}
+
+/// Case-insensitive substring-contains (needle must be lowercase).
+[[nodiscard]] inline bool
+icontains_lower(std::string_view hay, std::string_view needle_lower) noexcept {
+    if (needle_lower.size() > hay.size()) return false;
+    for (std::size_t i = 0; i + needle_lower.size() <= hay.size(); ++i) {
+        bool match = true;
+        for (std::size_t j = 0; j < needle_lower.size(); ++j) {
+            const auto c = static_cast<unsigned char>(hay[i + j]);
+            if (std::tolower(c) != static_cast<unsigned char>(needle_lower[j])) {
+                match = false;
+                break;
+            }
+        }
+        if (match) return true;
+    }
+    return false;
+}
+
+/// Constant-time equality for two byte strings of identical length.
+[[nodiscard]] inline bool
+constant_time_equal(std::string_view a, std::string_view b) noexcept {
+    if (a.size() != b.size()) return false;
+    unsigned diff = 0;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        diff |= static_cast<unsigned char>(a[i]) ^
+                static_cast<unsigned char>(b[i]);
+    }
+    return diff == 0;
+}
+
+} // namespace detail
+
 template <typename IO_>
 class ws_server : public ws_internal::base<IO_> {
     std::string endpoint;
+
+    /**
+     * @brief Populate @p response with a valid `101 Switching Protocols`
+     *        reply for a well-formed RFC 6455 upgrade request.
+     * @return true when the handshake is valid.
+     *
+     * Enforces:
+     *   - presence of `Sec-WebSocket-Key` (RFC §4.2.1/5);
+     *   - presence of `Sec-WebSocket-Version` with value `13` (MUST).
+     */
+    template <typename HttpRequest, typename HttpResponse>
+    static bool
+    populate_handshake_response(HttpRequest const &request,
+                                HttpResponse      &response) {
+        if (!request.upgrade)
+            return false;
+
+        const std::string_view ws_key  = request.header("Sec-WebSocket-Key");
+        const std::string_view version = request.header("Sec-WebSocket-Version");
+        if (ws_key.empty())
+            return false;
+        if (!detail::iequal_ascii(version, "13"))
+            return false;
+
+        response.status() = qb::http::status::SWITCHING_PROTOCOLS;
+        response.headers()["Upgrade"].emplace_back("websocket");
+        response.headers()["Connection"].emplace_back("Upgrade");
+        response.headers()["Sec-WebSocket-Accept"].emplace_back(
+            detail::compute_accept_key(ws_key));
+        return true;
+    }
 
 public:
     // server side event
@@ -681,27 +855,14 @@ public:
     template <typename HttpRequest>
     ws_server(IO_ &io, HttpRequest const &http)
         : ws_internal::base<IO_>(io) {
-        static const auto ws_magic_string = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-        if (http.upgrade) {
-            std::string ws_key(http.header("Sec-WebSocket-Key"));
-            if (!ws_key.empty()) {
-                ws_key += ws_magic_string;
-                qb::http::Response res;
-                res.status() = qb::http::status::SWITCHING_PROTOCOLS;
-                res.headers()["Upgrade"].emplace_back("websocket");
-                res.headers()["Connection"].emplace_back("Upgrade");
-                res.headers()["Sec-WebSocket-Accept"].emplace_back(
-                    crypto::base64::encode(crypto::sha1(ws_key)));
-
-                if constexpr (qb::has_on<IO_, sending_http_response>) {
-                    this->_io.on(sending_http_response{res});
-                }
-
-                this->_io << res;
-                endpoint = http.uri().path();
-                return;
+        qb::http::Response res;
+        if (populate_handshake_response(http, res)) {
+            if constexpr (qb::has_on<IO_, sending_http_response>) {
+                this->_io.on(sending_http_response{res});
             }
-            // error
+            this->_io << res;
+            endpoint = http.uri().path();
+            return;
         }
         this->not_ok();
     }
@@ -709,48 +870,62 @@ public:
     template <typename HttpRequest, typename HttpResponse>
     ws_server(IO_ &io, HttpRequest const &request, HttpResponse &response)
         : ws_internal::base<IO_>(io) {
-        static const auto ws_magic_string = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-        if (request.upgrade) {
-            std::string ws_key(request.header("Sec-WebSocket-Key"));
-            if (!ws_key.empty()) {
-                ws_key += ws_magic_string;
-                response.status() = qb::http::status::SWITCHING_PROTOCOLS;
-                response.headers()["Upgrade"].emplace_back("websocket");
-                response.headers()["Connection"].emplace_back("Upgrade");
-                response.headers()["Sec-WebSocket-Accept"].emplace_back(
-                    crypto::base64::encode(crypto::sha1(ws_key)));
-
-                endpoint = request.uri().path();
-                return;
-            }
-            // error
+        if (populate_handshake_response(request, response)) {
+            endpoint = request.uri().path();
+            return;
         }
         this->not_ok();
     }
-
 };
 
 template <typename IO_>
 class ws_client : public ws_internal::base<IO_> {
+
+    /**
+     * @brief Validate the server's 101 response against the client key.
+     *
+     * Per RFC 6455 §4.1, the client MUST verify:
+     *   - HTTP status is `101 Switching Protocols`;
+     *   - `Upgrade` header value case-insensitively matches `websocket`;
+     *   - `Connection` header value contains `Upgrade` (case-insensitive,
+     *     since the header may carry other tokens such as `keep-alive`);
+     *   - `Sec-WebSocket-Accept` equals `base64(sha1(key + GUID))`.
+     *
+     * The final comparison is done in constant time to stay consistent with
+     * the security guidelines used across the rest of the framework — even
+     * though the accept key is not itself a secret, treating it like one
+     * costs nothing and prevents surprises if the handshake is ever used
+     * as an oracle.
+     */
+    template <typename HttpResponse>
+    [[nodiscard]] static bool
+    validate_handshake_response(HttpResponse const &http,
+                                std::string const  &key) noexcept {
+        if (!http.upgrade)
+            return false;
+        if (http.status() != qb::http::status::SWITCHING_PROTOCOLS)
+            return false;
+        if (!detail::iequal_ascii(http.header("Upgrade"), "websocket"))
+            return false;
+        if (!detail::icontains_lower(http.header("Connection"), "upgrade"))
+            return false;
+
+        const std::string_view res_key = http.header("Sec-WebSocket-Accept");
+        if (res_key.empty())
+            return false;
+
+        std::string expected = detail::compute_accept_key(key);
+        return detail::constant_time_equal(res_key, expected);
+    }
+
 public:
     ws_client() = delete;
     template <typename HttpResponse>
     ws_client(IO_ &io, HttpResponse const &http, std::string const &key)
         : ws_internal::base<IO_>(io) {
-        static const auto ws_magic_string = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-        if (http.upgrade) {
-            if (http.status() == qb::http::status::SWITCHING_PROTOCOLS) {
-                const auto res_key = http.header("Sec-WebSocket-Accept");
-                if (!res_key.empty()) {
-                    if (crypto::base64::decode(std::string(res_key)) ==
-                        crypto::sha1(key + ws_magic_string)) {
-                        return;
-                    }
-                }
-            }
-            // error
+        if (!validate_handshake_response(http, key)) {
+            this->not_ok();
         }
-        this->not_ok();
     }
 };
 
@@ -804,7 +979,7 @@ private:
     const T& derived() const noexcept { return *static_cast<const T*>(this); }
 
 public:
-    using http_protocol = http::protocol_view<WebSocket<T, Transport>>;
+    using http_protocol = http::protocol<WebSocket<T, Transport>>;
     using ws_protocol   = http::ws::protocol<WebSocket<T, Transport>>;
 
     // public events
@@ -849,8 +1024,8 @@ public:
         {}
 
     /**
-     * @brief Sets the ping interval for keepalive
-     * @param ping_interval Interval in milliseconds (0 to disable pings)
+     * @brief Sets the ping interval for keepalive.
+     * @param ping_interval Interval in milliseconds (0 to disable pings).
      *
      * Configures automatic ping/pong keepalive mechanism.
      * A value of 0 disables automatic pings.
@@ -859,6 +1034,38 @@ public:
     set_ping_interval(int ping_interval = 0) {
         _ping_interval = ping_interval;
         this->setTimeout(ping_interval);
+    }
+
+    /**
+     * @brief Chrono-friendly overload of `set_ping_interval`.
+     *
+     * Accepts any duration; values under one millisecond disable keepalive.
+     */
+    template <typename Rep, typename Period>
+    void
+    set_ping_interval(std::chrono::duration<Rep, Period> ping_interval) {
+        const auto ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(ping_interval)
+                .count();
+        set_ping_interval(ms <= 0 ? 0 : static_cast<int>(ms));
+    }
+
+    /**
+     * @brief Send a Close frame with an explicit status + reason.
+     *
+     * Convenience over building a `MessageClose` by hand. The frame is queued
+     * on the outbound pipe and will be flushed on the next I/O tick; call
+     * `disconnect()` afterwards if you want to tear the TCP stream down
+     * immediately (otherwise RFC 6455 §5.5.1 prescribes waiting for the
+     * peer's Close echo).
+     *
+     * @throws std::invalid_argument when @p status is a reserved code.
+     */
+    void
+    close(CloseStatus status = CloseStatus::Normal,
+          std::string_view reason = "closed normally") {
+        MessageClose msg(status, reason);
+        *this << msg;
     }
 
     /**

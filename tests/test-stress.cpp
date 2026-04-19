@@ -202,7 +202,7 @@ private:
 
 public:
     // Define protocol types with fully qualified namespaces
-    using Protocol    = qb::http::protocol_view<StressServerClient>;
+    using Protocol    = qb::http::protocol<StressServerClient>;
     using WS_Protocol = qb::http::ws::protocol<StressServerClient>;
 
     /**
@@ -433,7 +433,7 @@ private:
 
 public:
     // Define protocol types with fully qualified namespaces
-    using Protocol    = qb::http::protocol_view<StressClient>;
+    using Protocol    = qb::http::protocol<StressClient>;
     using WS_Protocol = qb::http::ws::protocol<StressClient>;
 
     /**

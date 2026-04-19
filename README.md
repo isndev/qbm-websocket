@@ -4,7 +4,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/WebSocket-RFC%206455-blue.svg" alt="WebSocket"/>
-  <img src="https://img.shields.io/badge/C%2B%2B-17-blue.svg" alt="C++17"/>
+  <img src="https://img.shields.io/badge/C%2B%2B-23-blue.svg" alt="C++23"/>
   <img src="https://img.shields.io/badge/Cross--Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg" alt="Cross Platform"/>
   <img src="https://img.shields.io/badge/Arch-x86__64%20%7C%20ARM64-lightgrey.svg" alt="Architecture"/>
   <img src="https://img.shields.io/badge/SSL-WSS-green.svg" alt="SSL/WSS"/>
@@ -349,6 +349,136 @@ int main() {
 }
 ```
 
+## Coroutine-First API (C++23)
+
+For conversational protocols — REST-over-WebSocket, RPC, request/reply flows
+— callback-driven code quickly becomes painful. `qbm-websocket` ships a
+coroutine-first surface (`qbm/ws/coro.h`) that lets you express both
+clients and servers as a single linear `qb::io::async::task<void>`, with
+no extra threads and no scheduler plumbing.
+
+It follows the same idioms already used in `qbm/redis`, `qbm/pgsql` and
+the coroutine surface of `qbm/http`. Strictly mono-thread per listener —
+resumption always runs on the I/O thread that owns the socket.
+
+### Coroutine Client
+
+```cpp
+#include <ws/coro.h>
+#include <qb/io/async.h>
+
+qb::io::async::task<std::string>
+talk_to_echo() {
+    qb::http::ws::coro_client ws;
+
+    auto c = co_await ws.connect("ws://localhost:9001/",
+                                 std::chrono::seconds{5});
+    if (!c.ok) co_return "connect failed";
+
+    qb::http::ws::MessageText msg;
+    msg << "ping";
+    ws << msg;
+
+    auto frame = co_await ws.receive();
+    // frame.kind == IncomingFrame::Kind::Message
+    // frame.payload == "ping" (echo)
+
+    co_await ws.close_async(qb::http::ws::CloseStatus::Normal, "done");
+    co_return frame.payload;
+}
+
+int main() {
+    qb::io::async::init();
+    auto reply = qb::http::ws::run_sync(talk_to_echo());
+    std::cout << reply << "\n";
+}
+```
+
+Highlights:
+- `co_await ws.connect(...)` performs both the TCP connect and the HTTP
+  upgrade; the result carries a single `ok` boolean.
+- `co_await ws.receive()` suspends until the next frame (message, ping,
+  pong, close, or transport disconnect). If the peer drops the TCP
+  stream while you're parked, the awaiter resolves with
+  `IncomingFrame::Kind::Disconnected` instead of hanging.
+- `co_await ws.close_async(status, reason)` queues a Close frame and
+  resumes once the peer has echoed it (or the transport dropped first).
+- `qb::http::ws::coro_client_secure` is the `wss://` flavour (TLS by
+  default).
+
+### Coroutine Server Session
+
+Server sessions can be written as a single coroutine method `run()`.
+The base class takes care of the HTTP upgrade, dispatches inbound frames
+into a queue, and spawns `run()` on successful upgrade — holding the
+session alive for the entire life of the coroutine.
+
+```cpp
+#include <ws/coro.h>
+
+class ChatServer;
+
+class ChatSession
+    : public qb::http::ws::coro_session<ChatSession, ChatServer> {
+public:
+    using base = qb::http::ws::coro_session<ChatSession, ChatServer>;
+    using base::base;
+
+    // Optional: negotiate a subprotocol before the upgrade is accepted.
+    ChatSession(ChatServer& s) : base(s) {
+        set_handshake_hook([](ChatSession&, qb::http::Request& req,
+                              qb::http::Response& res) {
+            // res.headers()["Sec-WebSocket-Protocol"].emplace_back("chat.v1");
+            return true; // accept
+        });
+    }
+
+    qb::io::async::task<void> run() {
+        while (true) {
+            auto frame = co_await this->next_frame();
+            if (frame.kind == qb::http::ws::IncomingFrame::Kind::Disconnected ||
+                frame.kind == qb::http::ws::IncomingFrame::Kind::Close) {
+                co_return;
+            }
+            if (frame.kind == qb::http::ws::IncomingFrame::Kind::Message) {
+                qb::http::ws::MessageText reply;
+                reply << "echo:" << frame.payload;
+                *this << reply;
+            }
+        }
+    }
+};
+
+class ChatServer : public qb::io::use<ChatServer>::tcp::server<ChatSession> {
+public:
+    void on(IOSession&) {}
+};
+```
+
+Key guarantees:
+- The session is kept alive for the whole life of the coroutine: every
+  suspension point is guaranteed to resume on a valid `*this`.
+- Return normally from `run()` (typically on a `Disconnected` or `Close`
+  frame) to release the session.
+- Thrown exceptions are caught by the base class, translated to a
+  `1011 UnexpectedReason` Close frame, and the TCP stream is torn down.
+- Pings received from the peer are automatically acknowledged with a
+  Pong (RFC 6455 §5.5.3) — you still receive the `Ping` frame through
+  `next_frame()` if you want to observe it.
+
+### When to Use Which API
+
+| Need                                                    | Use                                    |
+|---------------------------------------------------------|----------------------------------------|
+| Dispatching many unrelated events in parallel            | Classical CRTP (`WebSocket`, `Client`) |
+| Linear request/reply style, stateful conversations       | `coro_client` / `coro_session`         |
+| One-shot handshake + single round-trip from `main()`     | `coro_client` + `qb::http::ws::run_sync` |
+| Existing callback-driven codebase                        | Classical CRTP (no migration cost)     |
+
+The two styles share the same underlying protocol implementation, so
+you can mix them within a single application — e.g. a coroutine-based
+admin client and a callback-based broadcaster on the same server.
+
 ## Secure WebSockets (WSS)
 
 Enabling secure communication is straightforward.
@@ -393,7 +523,7 @@ class MySecureClient : public qb::Actor, public qb::http::ws::WebSocketSecure<My
 
 -   **QB Framework**: This module requires the core QB Actor Framework.
 -   **`qbm-http`**: The WebSocket module is an extension of the HTTP module and depends on it.
--   **C++17** compatible compiler (GCC 7+, Clang 6+, MSVC 2017+).
+-   **C++23** compatible compiler (GCC 13+, Clang 17+, MSVC 19.38+).
 -   **CMake 3.14+**.
 
 ### Optional Dependencies

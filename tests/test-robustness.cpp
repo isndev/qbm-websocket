@@ -161,7 +161,7 @@ private:
     std::vector<char> _last_binary;  /**< Last received binary message content */
 
 public:
-    using Protocol    = qb::http::protocol_view<RobustServerClient>;
+    using Protocol    = qb::http::protocol<RobustServerClient>;
     using WS_Protocol = qb::http::ws::protocol<RobustServerClient>;
 
     /**
@@ -412,7 +412,7 @@ private:
 public:
     std::string last_pong_data_; /**< Data from last received pong */
 
-    using Protocol    = qb::http::protocol_view<RobustClient>;
+    using Protocol    = qb::http::protocol<RobustClient>;
     using WS_Protocol = qb::http::ws::protocol<RobustClient>;
 
     /**
@@ -904,7 +904,7 @@ private:
 public:
     std::string last_pong_data_; /**< Data from last received pong */
 
-    using Protocol    = qb::http::protocol_view<DebugClient>;
+    using Protocol    = qb::http::protocol<DebugClient>;
     using WS_Protocol = qb::http::ws::protocol<DebugClient>;
 
     /**

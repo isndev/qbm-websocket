@@ -21,6 +21,10 @@ set(WEBSOCKET_TESTS
         robustness
         stress
         security
+        coro-client
+        coro-server
+        coro-integration
+        coro-negative
 )
 
 # Register each test
