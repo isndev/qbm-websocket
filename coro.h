@@ -729,16 +729,16 @@ public:
 
     void
     on(typename WS_Protocol::ping &&event) {
+        // RFC 6455 §5.5.3 ("as soon as is practical") is already honoured
+        // by the base framer: `ws_internal::base::processControlFrame`
+        // unconditionally forwards a Pong with the same payload AFTER
+        // dispatching this observer. Emitting another Pong here would
+        // double-send. We merely surface the ping to any coroutine parked
+        // on `next_frame()`.
         IncomingFrame frame;
         frame.kind = IncomingFrame::Kind::Ping;
         frame.payload.assign(event.data, event.size);
         deliver_frame(std::move(frame));
-        // Auto-echo a pong (RFC 6455 §5.5.3 — "as soon as is practical").
-        MessagePong pong;
-        if (event.size) {
-            pong << std::string(event.data, event.size);
-        }
-        *this << pong;
     }
 
     void

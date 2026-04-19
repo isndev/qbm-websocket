@@ -325,23 +325,23 @@ TEST_F(CoroServerTest, CoroBinaryIsDistinguished) {
 TEST_F(CoroServerTest, CoroHandshakeHookAdvertisesSubprotocol) {
     ServerThread<SubprotoCoroServer> server{19943};
 
-    // The coroutine client doesn't expose a subprotocol setter yet, so we
-    // hook into `sending_http_request` to inject the offer, and read back
-    // the negotiated value via an `on(sending_http_request)` observer.
-    // We also sniff the server's reply protocol via a small helper below.
+    // Client-side uses the first-class `set_subprotocols` API — the
+    // offer appears verbatim in the outgoing `Sec-WebSocket-Protocol`
+    // header, and the selected value round-trips back through
+    // `negotiated_subprotocol()` after `connect()` resolves.
 
-    // We dispatch the handshake manually by forging a request via the
-    // existing `coro_client::connect` machinery and then — after the 101
-    // response — issue a message to observe the echo. The focus here is
-    // that `on(Protocol::request)` ran and accepted the hook-mutated
-    // response; we assert observable behaviour: the session is live and
-    // echoes "ok:<msg>" back.
+    struct Outcome {
+        std::string echoed;
+        std::string negotiated;
+    };
 
-    auto scenario = [&]() -> qb::io::async::task<std::string> {
+    auto scenario = [&]() -> qb::io::async::task<Outcome> {
         qb::http::ws::coro_client ws;
+        ws.set_subprotocols({"chat.v1", "chat.v2"});
+
         auto c = co_await ws.connect("ws://localhost:19943/");
         EXPECT_TRUE(c.ok);
-        if (!c.ok) co_return std::string{};
+        if (!c.ok) co_return Outcome{};
 
         qb::http::ws::MessageText msg;
         msg << "hello";
@@ -349,10 +349,29 @@ TEST_F(CoroServerTest, CoroHandshakeHookAdvertisesSubprotocol) {
 
         auto frame = co_await ws.receive();
         EXPECT_EQ(frame.kind, qb::http::ws::IncomingFrame::Kind::Message);
-        co_return frame.payload;
+        co_return Outcome{frame.payload,
+                          std::string(ws.negotiated_subprotocol())};
     };
 
-    EXPECT_EQ(qb::http::ws::run_sync(scenario()), "ok:hello");
+    const auto out = qb::http::ws::run_sync(scenario());
+    EXPECT_EQ(out.echoed, "ok:hello");
+    EXPECT_EQ(out.negotiated, "chat.v2");
+}
+
+// Server advertises no subprotocol when the client didn't offer one —
+// `negotiated_subprotocol()` must stay empty. Regression guard against
+// accidental header leakage.
+TEST_F(CoroServerTest, CoroNegotiatedSubprotocolEmptyWhenNoOffer) {
+    ServerThread<EchoCoroServer> server{19946};
+
+    auto scenario = [&]() -> qb::io::async::task<std::string> {
+        qb::http::ws::coro_client ws;
+        auto c = co_await ws.connect("ws://localhost:19946/");
+        EXPECT_TRUE(c.ok);
+        co_return std::string(ws.negotiated_subprotocol());
+    };
+
+    EXPECT_TRUE(qb::http::ws::run_sync(scenario()).empty());
 }
 
 TEST_F(CoroServerTest, CoroHandshakeHookRejectsUpgrade) {

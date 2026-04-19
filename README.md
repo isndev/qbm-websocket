@@ -403,6 +403,10 @@ Highlights:
   `IncomingFrame::Kind::Disconnected` instead of hanging.
 - `co_await ws.close_async(status, reason)` queues a Close frame and
   resumes once the peer has echoed it (or the transport dropped first).
+- `ws.set_subprotocols({"chat.v2", "chat.v1"})` before `connect()` offers
+  RFC 6455 subprotocols; after a successful handshake,
+  `ws.negotiated_subprotocol()` returns the token the server picked (or
+  an empty view when none was negotiated).
 - `qb::http::ws::coro_client_secure` is the `wss://` flavour (TLS by
   default).
 

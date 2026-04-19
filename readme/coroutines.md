@@ -114,6 +114,28 @@ qb::io::async::task<void> login_and_greet() {
   outside `[1000..4999]`) raise `std::invalid_argument` at construction
   time — building such a frame is always a programming bug.
 
+### Subprotocol negotiation
+
+The client advertises subprotocol offers through the CRTP base:
+
+```cpp
+qb::http::ws::coro_client ws;
+ws.set_subprotocols({"chat.v2", "chat.v1"});   // preference order
+auto c = co_await ws.connect("wss://api.example.com/socket");
+if (!c.ok) co_return;
+
+const std::string_view chosen = ws.negotiated_subprotocol();
+// chosen == "chat.v2" when the server picks that token, empty otherwise.
+```
+
+- `set_subprotocols(list)` overwrites the offer list.
+- `add_subprotocol(name)` appends a single token.
+- The client sends exactly one `Sec-WebSocket-Protocol` header with the
+  comma-separated list (RFC 6455 §4.1).
+- `negotiated_subprotocol()` becomes valid after `connect()` resolves
+  successfully and stays empty if the server omitted the header or did
+  not accept any offer.
+
 ### Buffering policy
 
 - Between two `receive()` calls, inbound frames queue up. The cap is

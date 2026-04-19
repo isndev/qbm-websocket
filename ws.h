@@ -36,9 +36,12 @@
 
 #include <qb/io/async/tcp/connector.h>
 #include <qb/io/crypto.h>
+#include <chrono>
 #include <random>
 #include <functional>
+#include <string>
 #include <string_view>
+#include <vector>
 #include "../http/http.h"
 
 // Forward declarations (must be outside qb::http::ws to avoid creating phantom namespaces)
@@ -974,9 +977,28 @@ class WebSocket
     int               _ping_interval; /**< Interval for sending ping frames (in ms) */
     ::qb::io::uri     _remote;        /**< Remote server URI */
 
+    /// Ordered list of subprotocols the client wishes to negotiate
+    /// (advertised as `Sec-WebSocket-Protocol` in the upgrade request).
+    std::vector<std::string> _offered_subprotocols;
+    /// Value selected by the server (taken verbatim from
+    /// `Sec-WebSocket-Protocol` in the `101` response, or empty when the
+    /// server did not advertise any). Populated in `on(http_response)`.
+    std::string _negotiated_subprotocol;
+
 private:
     T& derived() noexcept { return *static_cast<T*>(this); }
     const T& derived() const noexcept { return *static_cast<const T*>(this); }
+
+    /// Trim ASCII whitespace from both ends of @p sv (RFC 7230 OWS).
+    [[nodiscard]] static std::string_view
+    trim_ows(std::string_view sv) noexcept {
+        constexpr std::string_view kOws = " \t";
+        const auto first = sv.find_first_not_of(kOws);
+        if (first == std::string_view::npos)
+            return {};
+        const auto last = sv.find_last_not_of(kOws);
+        return sv.substr(first, last - first + 1);
+    }
 
 public:
     using http_protocol = http::protocol<WebSocket<T, Transport>>;
@@ -1068,6 +1090,44 @@ public:
         *this << msg;
     }
 
+    // -------------------------------------------------------------------
+    // Subprotocol negotiation (RFC 6455 §1.9 / §4.1 / §4.2.2)
+    // -------------------------------------------------------------------
+
+    /**
+     * @brief Set the list of subprotocols offered to the server.
+     *
+     * The values are serialised verbatim as a comma-separated
+     * `Sec-WebSocket-Protocol` header on the upgrade request. The server
+     * MUST either pick exactly one of them (case-sensitive match) or drop
+     * the header entirely — the final choice is available via
+     * `negotiated_subprotocol()` after `on(connected)` fires.
+     *
+     * Must be called before `connect()`.
+     */
+    void
+    set_subprotocols(std::vector<std::string> protocols) {
+        _offered_subprotocols = std::move(protocols);
+    }
+
+    /**
+     * @brief Append a single subprotocol to the list offered on the next
+     *        handshake. See `set_subprotocols()`.
+     */
+    void
+    add_subprotocol(std::string protocol) {
+        _offered_subprotocols.emplace_back(std::move(protocol));
+    }
+
+    /**
+     * @brief The subprotocol the server picked (empty when none was
+     *        negotiated). Valid after the `connected` event has fired.
+     */
+    [[nodiscard]] std::string_view
+    negotiated_subprotocol() const noexcept {
+        return _negotiated_subprotocol;
+    }
+
     /**
      * @brief Connects to a WebSocket server
      * @param remote URI of the remote WebSocket endpoint
@@ -1081,7 +1141,8 @@ public:
     connect(::qb::io::uri const &remote, int timeout = 0) {
         this->clear_protocols();
         this->setTimeout(0);
-        _remote = remote;
+        _remote                 = remote;
+        _negotiated_subprotocol.clear();
         ::qb::io::async::tcp::connect<typename Transport::transport_io_type>(
             remote,
             [this](auto &&transport) {
@@ -1098,6 +1159,17 @@ public:
                     request.headers()["host"].emplace_back(std::string(_remote.host()));
                     request.uri() = _remote;
 
+                    if (!_offered_subprotocols.empty()) {
+                        std::string joined;
+                        for (std::size_t i = 0; i < _offered_subprotocols.size();
+                             ++i) {
+                            if (i) joined.append(", ");
+                            joined.append(_offered_subprotocols[i]);
+                        }
+                        request.headers()["Sec-WebSocket-Protocol"].emplace_back(
+                            std::move(joined));
+                    }
+
                     if constexpr (qb::has_on<T, sending_http_request>) {
                         derived().on(sending_http_request{request});
                     }
@@ -1106,6 +1178,22 @@ public:
                 }
             },
             timeout);
+    }
+
+    /**
+     * @brief Chrono-friendly overload of `connect()`.
+     *
+     * Accepts any `std::chrono::duration`; values under one millisecond
+     * disable the connection timeout (same convention as
+     * `set_ping_interval`).
+     */
+    template <typename Rep, typename Period>
+    void
+    connect(::qb::io::uri const                  &remote,
+            std::chrono::duration<Rep, Period>   timeout) {
+        const auto ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count();
+        connect(remote, ms <= 0 ? 0 : static_cast<int>(ms));
     }
 
     /**
@@ -1125,6 +1213,19 @@ public:
             this->disconnect();
             return;
         }
+
+        // Capture the negotiated subprotocol (RFC 6455 §4.2.2 — the
+        // server MUST echo exactly one of the client's offers, or omit
+        // the header). We trim OWS and take the first token to be
+        // defensive against servers that misuse list syntax.
+        const std::string_view selected =
+            trim_ows(event.header("Sec-WebSocket-Protocol"));
+        if (!selected.empty()) {
+            const auto comma = selected.find(',');
+            _negotiated_subprotocol.assign(
+                trim_ows(selected.substr(0, comma)));
+        }
+
         if constexpr (qb::has_on<T, connected>) {
             derived().on(connected{});
             this->setTimeout(_ping_interval);
