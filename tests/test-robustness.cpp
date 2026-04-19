@@ -381,7 +381,7 @@ public:
      * @param event Disconnection event
      */
     void
-    on(async::event::disconnected &) {
+    on(async::event::disconnected const &) {
         if (--_current_connections == 0 &&
             _current_connections != _expected_connections) {
             // Ne pas incrémenter connection_count ici
