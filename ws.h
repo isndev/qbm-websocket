@@ -397,6 +397,38 @@ constexpr uint8_t     PAYLOAD_LEN_64_BIT           = 127;
 } // namespace rfc
 
 /**
+ * @brief Wire-level WebSocket events (not nested inside base<IO_>).
+ *
+ * Previously `base<IO_>::message` etc. were nested classes, so
+ * `base<BoundedSession>::message` and `base<coro_session<...>>::message`
+ * were unrelated types and `coro_session::on(WS_Protocol::message&&)`
+ * could not bind. These aggregates are shared for every I/O handler type.
+ */
+struct event_close {
+    const std::size_t       size;
+    const char             *data;
+    ::qb::http::ws::Message &ws;
+};
+
+struct event_ping {
+    const std::size_t       size;
+    const char             *data;
+    ::qb::http::ws::Message &ws;
+};
+
+struct event_pong {
+    const std::size_t       size;
+    const char             *data;
+    ::qb::http::ws::Message &ws;
+};
+
+struct event_message {
+    const std::size_t       size;
+    const char             *data;
+    ::qb::http::ws::Message &ws;
+};
+
+/**
  * @class base
  * @brief Base implementation of the WebSocket protocol
  *
@@ -551,49 +583,10 @@ class base : public qb::io::async::AProtocol<IO_> {
     }
 
 public:
-    /**
-     * @struct close
-     * @brief Event triggered when a connection close frame is received
-     * @warning The data pointer and message reference in this event are only valid for the duration of the 'on' callback.
-     */
-    struct close {
-        const std::size_t      size; /**< Size of the close message payload */
-        const char            *data; /**< Pointer to the close message payload */
-        qb::http::ws::Message &ws;   /**< Reference to the original message */
-    };
-
-    /**
-     * @struct ping
-     * @brief Event triggered when a ping frame is received
-     * @warning The data pointer and message reference in this event are only valid for the duration of the 'on' callback.
-     */
-    struct ping {
-        const std::size_t      size; /**< Size of the ping payload */
-        const char            *data; /**< Pointer to the ping payload */
-        qb::http::ws::Message &ws;   /**< Reference to the original message */
-    };
-
-    /**
-     * @struct pong
-     * @brief Event triggered when a pong frame is received
-     * @warning The data pointer and message reference in this event are only valid for the duration of the 'on' callback.
-     */
-    struct pong {
-        const std::size_t      size; /**< Size of the pong payload */
-        const char            *data; /**< Pointer to the pong payload */
-        qb::http::ws::Message &ws;   /**< Reference to the original message */
-    };
-
-    /**
-     * @struct message
-     * @brief Event triggered when a data frame (text or binary) is received
-     * @warning The data pointer and message reference in this event are only valid for the duration of the 'on' callback.
-     */
-    struct message {
-        const std::size_t      size; /**< Size of the message payload */
-        const char            *data; /**< Pointer to the message payload */
-        qb::http::ws::Message &ws;   /**< Reference to the original message */
-    };
+    using close   = event_close;
+    using ping    = event_ping;
+    using pong    = event_pong;
+    using message = event_message;
 
     base() = delete;
 
@@ -854,6 +847,11 @@ public:
     };
     // !server side event
 
+    using close   = ws_internal::event_close;
+    using ping    = ws_internal::event_ping;
+    using pong    = ws_internal::event_pong;
+    using message = ws_internal::event_message;
+
     ws_server() = delete;
     template <typename HttpRequest>
     ws_server(IO_ &io, HttpRequest const &http)
@@ -922,6 +920,11 @@ class ws_client : public ws_internal::base<IO_> {
     }
 
 public:
+    using close   = ws_internal::event_close;
+    using ping    = ws_internal::event_ping;
+    using pong    = ws_internal::event_pong;
+    using message = ws_internal::event_message;
+
     ws_client() = delete;
     template <typename HttpResponse>
     ws_client(IO_ &io, HttpResponse const &http, std::string const &key)
