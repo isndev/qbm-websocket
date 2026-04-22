@@ -26,7 +26,7 @@ Origin: http://example.com
 *   `Host`: Standard HTTP Host header.
 *   `Upgrade: websocket`: Declares the desired protocol is WebSocket.
 *   `Connection: Upgrade`: Signals that this is an upgrade request.
-*   `Sec-WebSocket-Key`: A **required**, randomly generated, 16-byte nonce, Base64 encoded. This key is *not* for security in the sense of authentication, but to prove that the server is a WebSocket-aware server and not an unsuspecting HTTP server.
+*   `Sec-WebSocket-Key`: A **required**, randomly generated, 16-byte nonce, Base64 encoded. The server validates both decode length (16 bytes) and canonical base64 representation.
 *   `Sec-WebSocket-Version: 13`: Specifies the WebSocket protocol version the client wishes to use. Version 13 is the standard defined by RFC 6455 and the only version supported by `qbm-websocket`.
 *   `Origin` (Optional but common): Indicates the origin of the script initiating the connection (important for browser security).
 *   `Sec-WebSocket-Protocol` (Optional): A comma-separated list of subprotocols the client is willing to use.
@@ -64,7 +64,7 @@ If the server cannot or does not want to upgrade the connection, it responds wit
 
 **QB Server Implementation:**
 *   An HTTP server component (e.g., based on `qb::http::protocol_view`) receives the initial GET request.
-*   The server logic inspects the headers (`Upgrade`, `Connection`, `Sec-WebSocket-Key`, `Sec-WebSocket-Version`).
+*   The server logic inspects the headers (`Upgrade`, `Connection`, `Sec-WebSocket-Key`, `Sec-WebSocket-Version`) with strict token/OWS validation.
 *   If the headers are valid, the server calculates the `Sec-WebSocket-Accept` value using `qb::crypto::sha1` and `qb::crypto::base64::encode`.
 *   The server constructs an HTTP `Response` with status `101` and the required headers (`Upgrade`, `Connection`, `Sec-WebSocket-Accept`).
 *   Crucially, **before** sending the `101` response, the server typically uses `switch_protocol<qb::http::ws::protocol>(...)` to change the protocol handler for that specific connection from the HTTP handler to the WebSocket handler (`qb::http::ws::protocol`).
@@ -76,4 +76,8 @@ After the client receives the `101` response and validates the `Sec-WebSocket-Ac
 
 **QB Implementation:**
 *   **Server:** The call to `switch_protocol` is the key step.
-*   **Client:** The `qb::http::ws::WebSocket` class template (`ws.h`) uses an internal HTTP protocol handler initially. Upon receiving a valid `101` response and verifying the `Sec-WebSocket-Accept` key, it internally calls `switch_protocol` to start using the `qb::http::ws::protocol` for subsequent data. 
+*   **Client:** The `qb::http::ws::WebSocket` class template (`ws.h`) uses an internal HTTP protocol handler initially. Upon receiving a valid `101` response and verifying:
+    * `Upgrade: websocket`,
+    * `Connection` containing the token `Upgrade`,
+    * `Sec-WebSocket-Accept` equality (OWS-trimmed, constant-time compare),
+    it internally calls `switch_protocol` to start using the `qb::http::ws::protocol` for subsequent data.

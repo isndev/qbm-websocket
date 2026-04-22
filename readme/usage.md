@@ -2,6 +2,13 @@
 
 This guide provides practical examples on how to use the `qbm-websocket` module to build WebSocket clients and servers within the QB Actor Framework.
 
+## Important Behavioral Notes (Current Module State)
+
+- Client API (`qb::http::ws::WebSocket<T>` and `qb::http::ws::client`) masks outgoing frames automatically; avoid forcing masking manually unless you are building raw frames.
+- Server-side outgoing frames are unmasked by default.
+- Parser side is strict RFC 6455: invalid opcodes, RSV misuse, invalid close payload/code, invalid UTF-8, and malformed length encodings are rejected.
+- Control frames (`Ping`, `Pong`, `Close`) are capped to 125-byte payload; oversized outgoing control frames throw `std::invalid_argument`.
+
 ## 1. Building a WebSocket Server
 
 WebSocket servers typically start as HTTP servers that handle the upgrade request.

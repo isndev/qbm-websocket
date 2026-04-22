@@ -290,4 +290,49 @@ TEST_F(CoroNegativeTest, OversizedCloseReasonIsTruncated) {
     }
 }
 
+TEST_F(CoroNegativeTest, OversizedUtf8CloseReasonKeepsValidBoundary) {
+    using qb::http::ws::MessageClose;
+    using qb::http::ws::CloseStatus;
+
+    // 121 ASCII bytes + '€' (3 bytes) = 124 bytes.
+    // A naive 123-byte truncation would cut inside the multi-byte sequence.
+    const std::string reason =
+        std::string(121, 'a') + std::string("\xE2\x82\xAC");
+    MessageClose msg{CloseStatus::Normal, reason};
+
+    ASSERT_GE(msg.size(), 2u);
+    const std::string_view wire_reason{msg._data.cbegin() + 2, msg.size() - 2};
+    EXPECT_TRUE(qb::http::ws::is_utf8(wire_reason));
+    EXPECT_EQ(wire_reason, std::string_view(std::string(121, 'a')));
+}
+
+TEST_F(CoroNegativeTest, InvalidUtf8CloseReasonIsRejected) {
+    using qb::http::ws::MessageClose;
+    using qb::http::ws::CloseStatus;
+
+    const std::string invalid_utf8{
+        static_cast<char>(0xED),
+        static_cast<char>(0xA0),
+        static_cast<char>(0x80)}; // UTF-16 surrogate encoded in UTF-8
+
+    EXPECT_THROW((MessageClose(CloseStatus::Normal, invalid_utf8)),
+                 std::invalid_argument);
+}
+
+TEST_F(CoroNegativeTest, CoroClientPendingCapZeroDropsWithoutCrash) {
+    qb::http::ws::coro_client ws;
+    ws.set_pending_cap(0);
+
+    qb::http::ws::MessageText payload;
+    payload << "x";
+
+    using MessageEvent = qb::http::ws::coro_client<>::message;
+    MessageEvent event{payload.size(), payload.data().cbegin(), payload};
+
+    // Prior to the fix, this path could call pop_front() on an empty deque
+    // when pending_cap == 0 and no awaiter was parked.
+    ws.on(std::move(event));
+    SUCCEED();
+}
+
 } // namespace

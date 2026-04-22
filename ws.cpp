@@ -32,6 +32,7 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <stdexcept>
 
 namespace qb::http::ws {
 
@@ -105,41 +106,96 @@ fill_secure_bytes(unsigned char *out, std::size_t n) {
  */
 bool
 is_utf8(std::string_view sv) noexcept {
-    auto it = sv.begin();
-    while (it != sv.end()) {
-        unsigned char c = *it;
-        ++it;
+    const auto *bytes = reinterpret_cast<const unsigned char *>(sv.data());
+    const auto  n     = sv.size();
 
-        if (c < 0x80) { // 0xxxxxxx (ASCII)
+    auto is_cont = [](unsigned char b) noexcept {
+        return (b & 0xC0u) == 0x80u;
+    };
+
+    std::size_t i = 0;
+    while (i < n) {
+        const unsigned char b0 = bytes[i];
+        if (b0 <= 0x7Fu) {
+            ++i;
             continue;
         }
 
-        if (c < 0xC2 || c > 0xF4) { // Invalid start byte
-            return false;
+        if (b0 >= 0xC2u && b0 <= 0xDFu) {
+            if (i + 1u >= n) return false;
+            const unsigned char b1 = bytes[i + 1u];
+            if (!is_cont(b1)) return false;
+            i += 2u;
+            continue;
         }
 
-        size_t extra_bytes = 0;
-        if (c < 0xE0) { // 110xxxxx 10xxxxxx
-            extra_bytes = 1;
-        } else if (c < 0xF0) { // 1110xxxx 10xxxxxx 10xxxxxx
-            extra_bytes = 2;
-        } else { // 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
-            extra_bytes = 3;
+        if (b0 == 0xE0u) {
+            if (i + 2u >= n) return false;
+            const unsigned char b1 = bytes[i + 1u];
+            const unsigned char b2 = bytes[i + 2u];
+            if (b1 < 0xA0u || b1 > 0xBFu || !is_cont(b2)) return false;
+            i += 3u;
+            continue;
+        }
+        if (b0 >= 0xE1u && b0 <= 0xECu) {
+            if (i + 2u >= n) return false;
+            const unsigned char b1 = bytes[i + 1u];
+            const unsigned char b2 = bytes[i + 2u];
+            if (!is_cont(b1) || !is_cont(b2)) return false;
+            i += 3u;
+            continue;
+        }
+        if (b0 == 0xEDu) {
+            if (i + 2u >= n) return false;
+            const unsigned char b1 = bytes[i + 1u];
+            const unsigned char b2 = bytes[i + 2u];
+            // U+D800..U+DFFF surrogates are forbidden in UTF-8.
+            if (b1 < 0x80u || b1 > 0x9Fu || !is_cont(b2)) return false;
+            i += 3u;
+            continue;
+        }
+        if (b0 >= 0xEEu && b0 <= 0xEFu) {
+            if (i + 2u >= n) return false;
+            const unsigned char b1 = bytes[i + 1u];
+            const unsigned char b2 = bytes[i + 2u];
+            if (!is_cont(b1) || !is_cont(b2)) return false;
+            i += 3u;
+            continue;
         }
 
-        if (std::distance(it, sv.end()) < static_cast<std::ptrdiff_t>(extra_bytes)) {
-            return false; // Not enough bytes left
-        }
-
-        // Check continuation bytes
-        for (size_t i = 0; i < extra_bytes; ++i) {
-            unsigned char next_byte = *it;
-            ++it;
-            if ((next_byte & 0xC0) != 0x80) { // Must be 10xxxxxx
+        if (b0 == 0xF0u) {
+            if (i + 3u >= n) return false;
+            const unsigned char b1 = bytes[i + 1u];
+            const unsigned char b2 = bytes[i + 2u];
+            const unsigned char b3 = bytes[i + 3u];
+            if (b1 < 0x90u || b1 > 0xBFu || !is_cont(b2) || !is_cont(b3))
                 return false;
-            }
+            i += 4u;
+            continue;
         }
+        if (b0 >= 0xF1u && b0 <= 0xF3u) {
+            if (i + 3u >= n) return false;
+            const unsigned char b1 = bytes[i + 1u];
+            const unsigned char b2 = bytes[i + 2u];
+            const unsigned char b3 = bytes[i + 3u];
+            if (!is_cont(b1) || !is_cont(b2) || !is_cont(b3)) return false;
+            i += 4u;
+            continue;
+        }
+        if (b0 == 0xF4u) {
+            if (i + 3u >= n) return false;
+            const unsigned char b1 = bytes[i + 1u];
+            const unsigned char b2 = bytes[i + 2u];
+            const unsigned char b3 = bytes[i + 3u];
+            if (b1 < 0x80u || b1 > 0x8Fu || !is_cont(b2) || !is_cont(b3))
+                return false;
+            i += 4u;
+            continue;
+        }
+
+        return false;
     }
+
     return true;
 }
 
@@ -152,7 +208,7 @@ is_utf8(std::string_view sv) noexcept {
  * touching the batched mask pool.
  */
 std::string
-generateKey() noexcept {
+generateKey() {
     unsigned char nonce[16];
     fill_secure_bytes(nonce, sizeof(nonce));
     return crypto::base64::encode({reinterpret_cast<char *>(nonce), sizeof(nonce)});
@@ -161,6 +217,25 @@ generateKey() noexcept {
 } // namespace qb::http::ws
 
 namespace qb::allocator {
+
+namespace {
+
+[[nodiscard]] bool
+is_control_opcode(unsigned char fin_rsv_opcode) noexcept {
+    const auto opcode = static_cast<unsigned char>(fin_rsv_opcode & 0x0Fu);
+    return opcode >= static_cast<unsigned char>(qb::http::ws::opcode::_Close);
+}
+
+void
+enforce_outgoing_frame_constraints(const http::ws::Message &msg) {
+    if (is_control_opcode(msg.fin_rsv_opcode) &&
+        msg.size() > qb::protocol::ws_internal::rfc::MAX_CONTROL_FRAME_PAYLOAD_SIZE) {
+        throw std::invalid_argument(
+            "qb::http::ws: control frame payload exceeds 125-byte RFC 6455 limit");
+    }
+}
+
+} // namespace
 
 /**
  * @brief Create an unmasked WebSocket frame in the output buffer
@@ -173,6 +248,8 @@ namespace qb::allocator {
  */
 static void
 fill_unmasked_message(pipe<char> &pipe, const http::ws::Message &msg) {
+    enforce_outgoing_frame_constraints(msg);
+
     std::size_t length = msg.size();
     pipe.reserve(length + 10); // Reserve space for header and payload
 
@@ -217,6 +294,8 @@ fill_unmasked_message(pipe<char> &pipe, const http::ws::Message &msg) {
  */
 static void
 fill_masked_message(pipe<char> &pipe, const http::ws::Message &msg) {
+    enforce_outgoing_frame_constraints(msg);
+
     // Pull a cryptographically unpredictable 4-byte mask from the thread-local
     // CSPRNG pool. No fresh `std::random_device` / `RAND_bytes` call per frame.
     std::array<unsigned char, 4> mask{};

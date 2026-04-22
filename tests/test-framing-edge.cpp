@@ -38,6 +38,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <gtest/gtest.h>
 #include <string>
 #include <thread>
@@ -233,6 +234,42 @@ make_client_frame(std::uint8_t opcode_with_flags, std::string_view payload) {
     return out;
 }
 
+std::optional<std::uint16_t>
+extract_close_code(std::string const &frame_bytes) {
+    if (frame_bytes.size() < 2u) {
+        return std::nullopt;
+    }
+    const auto b0 = static_cast<std::uint8_t>(frame_bytes[0]);
+    const auto b1 = static_cast<std::uint8_t>(frame_bytes[1]);
+    if ((b0 & 0x0Fu) != 0x08u) {
+        return std::nullopt;
+    }
+    if ((b1 & 0x80u) != 0u) {
+        return std::nullopt; // server->client close must be unmasked
+    }
+
+    std::size_t payload_len = static_cast<std::size_t>(b1 & 0x7Fu);
+    std::size_t header_len = 2u;
+    if (payload_len == 126u) {
+        if (frame_bytes.size() < 4u) {
+            return std::nullopt;
+        }
+        payload_len =
+            (static_cast<std::size_t>(static_cast<std::uint8_t>(frame_bytes[2])) << 8u) |
+            static_cast<std::size_t>(static_cast<std::uint8_t>(frame_bytes[3]));
+        header_len = 4u;
+    } else if (payload_len == 127u) {
+        return std::nullopt; // unexpected for close in these tests
+    }
+
+    if (frame_bytes.size() < header_len + payload_len || payload_len < 2u) {
+        return std::nullopt;
+    }
+    const auto hi = static_cast<std::uint8_t>(frame_bytes[header_len]);
+    const auto lo = static_cast<std::uint8_t>(frame_bytes[header_len + 1u]);
+    return static_cast<std::uint16_t>((hi << 8u) | lo);
+}
+
 // Read at most @p max bytes, polling the socket a few times to tolerate
 // the event loop cadence. Returns whatever arrived when `dead` fires.
 std::string
@@ -263,6 +300,7 @@ TEST_F(FramingEdgeTest, InterleavedPingDuringFragmented) {
     qb::io::tcp::socket sock;
     const auto rc = sock.connect(qb::io::uri{"tcp://localhost:19972"});
     ASSERT_EQ(rc, 0);
+    (void) sock.set_nonblocking(true);
 
     // --- 1. Run the HTTP upgrade by hand so we stay on a raw socket -----
     const std::string upgrade =
@@ -324,6 +362,153 @@ TEST_F(FramingEdgeTest, InterleavedPingDuringFragmented) {
     EXPECT_EQ(static_cast<std::uint8_t>(got[4]), 0x05u) << "frame#2 len7";
     EXPECT_EQ(got.substr(5, 5), "Hello")
         << "server did not reassemble the fragmented text message";
+
+    sock.close();
+}
+
+TEST_F(FramingEdgeTest, FragmentedPayloadLimitIsEnforcedOnAggregateMessageSize) {
+    ServerThread<BoundedServer> server{19973};
+
+    qb::io::tcp::socket sock;
+    const auto rc = sock.connect(qb::io::uri{"tcp://localhost:19973"});
+    ASSERT_EQ(rc, 0);
+    (void) sock.set_nonblocking(true);
+
+    const std::string upgrade =
+        "GET /edge HTTP/1.1\r\n"
+        "Host: localhost:19973\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "\r\n";
+    sock.write(upgrade.data(), static_cast<int>(upgrade.size()));
+
+    std::string response;
+    for (int i = 0; i < 500; ++i) {
+        char buf[512];
+        int  n = sock.read(buf, sizeof(buf));
+        if (n > 0) response.append(buf, static_cast<std::size_t>(n));
+        if (response.find("\r\n\r\n") != std::string::npos) break;
+        std::this_thread::sleep_for(5ms);
+    }
+    ASSERT_NE(response.find("101"), std::string::npos)
+        << "handshake failed:\n" << response;
+
+    // 40 + 40 bytes: each frame is under the 64-byte limit, but aggregate
+    // fragmented message exceeds it and must be rejected with 1009.
+    auto frame_a = make_client_frame(0x01, std::string(40, 'A'));
+    auto frame_b = make_client_frame(0x80, std::string(40, 'B'));
+    sock.write(reinterpret_cast<const char *>(frame_a.data()),
+               static_cast<int>(frame_a.size()));
+    sock.write(reinterpret_cast<const char *>(frame_b.data()),
+               static_cast<int>(frame_b.size()));
+
+    const std::string got = read_some(sock, 128);
+    const auto close_code = extract_close_code(got);
+    ASSERT_TRUE(close_code.has_value())
+        << "server did not send a parseable close frame: size=" << got.size();
+    EXPECT_EQ(*close_code,
+              static_cast<std::uint16_t>(qb::http::ws::CloseStatus::MessageTooBig));
+
+    sock.close();
+}
+
+TEST_F(FramingEdgeTest, NonMinimalPayloadLengthEncodingIsRejected) {
+    ServerThread<EchoServer> server{19974};
+
+    qb::io::tcp::socket sock;
+    const auto rc = sock.connect(qb::io::uri{"tcp://localhost:19974"});
+    ASSERT_EQ(rc, 0);
+    (void) sock.set_nonblocking(true);
+
+    const std::string upgrade =
+        "GET /edge HTTP/1.1\r\n"
+        "Host: localhost:19974\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "\r\n";
+    sock.write(upgrade.data(), static_cast<int>(upgrade.size()));
+
+    std::string response;
+    for (int i = 0; i < 500; ++i) {
+        char buf[512];
+        int  n = sock.read(buf, sizeof(buf));
+        if (n > 0) response.append(buf, static_cast<std::size_t>(n));
+        if (response.find("\r\n\r\n") != std::string::npos) break;
+        std::this_thread::sleep_for(5ms);
+    }
+    ASSERT_NE(response.find("101"), std::string::npos)
+        << "handshake failed:\n" << response;
+
+    // Build a text frame with payload length encoded as 126 + ext16(1), which
+    // is non-minimal and must be rejected with 1002.
+    std::vector<std::uint8_t> bad;
+    bad.reserve(2 + 2 + 4 + 1);
+    bad.push_back(0x81u); // FIN + text
+    bad.push_back(0x80u | 126u); // masked + extended16
+    bad.push_back(0x00u);
+    bad.push_back(0x01u); // actual payload length = 1 (invalid encoding form)
+    constexpr std::array<std::uint8_t, 4> mask{{0x12, 0x34, 0x56, 0x78}};
+    for (auto m : mask) bad.push_back(m);
+    bad.push_back(static_cast<std::uint8_t>('X') ^ mask[0]);
+
+    sock.write(reinterpret_cast<const char *>(bad.data()),
+               static_cast<int>(bad.size()));
+
+    const std::string got = read_some(sock, 128);
+    const auto close_code = extract_close_code(got);
+    ASSERT_TRUE(close_code.has_value())
+        << "server did not send a parseable close frame: size=" << got.size();
+    EXPECT_EQ(*close_code,
+              static_cast<std::uint16_t>(qb::http::ws::CloseStatus::ProtocolError));
+
+    sock.close();
+}
+
+TEST_F(FramingEdgeTest, InvalidUtf8TextFrameIsRejectedWith1007) {
+    ServerThread<EchoServer> server{19975};
+
+    qb::io::tcp::socket sock;
+    const auto rc = sock.connect(qb::io::uri{"tcp://localhost:19975"});
+    ASSERT_EQ(rc, 0);
+    (void) sock.set_nonblocking(true);
+
+    const std::string upgrade =
+        "GET /edge HTTP/1.1\r\n"
+        "Host: localhost:19975\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "\r\n";
+    sock.write(upgrade.data(), static_cast<int>(upgrade.size()));
+
+    std::string response;
+    for (int i = 0; i < 500; ++i) {
+        char buf[512];
+        int  n = sock.read(buf, sizeof(buf));
+        if (n > 0) response.append(buf, static_cast<std::size_t>(n));
+        if (response.find("\r\n\r\n") != std::string::npos) break;
+        std::this_thread::sleep_for(5ms);
+    }
+    ASSERT_NE(response.find("101"), std::string::npos)
+        << "handshake failed:\n" << response;
+
+    // UTF-8 surrogate sequence U+D800 encoded as ED A0 80 is invalid.
+    const std::string invalid_utf8("\xED\xA0\x80", 3);
+    auto frame = make_client_frame(0x81, invalid_utf8);
+    sock.write(reinterpret_cast<const char *>(frame.data()),
+               static_cast<int>(frame.size()));
+
+    const std::string got = read_some(sock, 128);
+    const auto close_code = extract_close_code(got);
+    ASSERT_TRUE(close_code.has_value())
+        << "server did not send a parseable close frame: size=" << got.size();
+    EXPECT_EQ(*close_code,
+              static_cast<std::uint16_t>(qb::http::ws::CloseStatus::DataNotConsistent));
 
     sock.close();
 }

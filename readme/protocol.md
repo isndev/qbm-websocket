@@ -11,6 +11,7 @@ Once the initial HTTP handshake is complete and `switch_protocol` has been calle
 3.  **Masking/Unmasking:** Applying or removing the XOR mask from the payload data based on the mask bit and the direction of communication (client->server MUST be masked, server->client MUST NOT be masked).
 4.  **Payload Assembly:** Collecting the payload data, potentially across multiple continuation frames.
 5.  **Event Dispatching:** Triggering specific events based on the frame type (opcode) once a complete message or control frame is received.
+6.  **Protocol Hardening:** Rejecting malformed/forbidden frames early with protocol-close semantics.
 
 ## Implementation (`ws_internal::base`)
 
@@ -25,7 +26,19 @@ The core logic resides in `qb::protocol::ws_internal::base<IO_>`. Key aspects:
     *   It checks the FIN bit and opcode to determine the frame type.
     *   It dispatches the appropriate event (`ping`, `pong`, `message`, `close`) to the `IO_` handler (your client/server class).
     *   It resets its internal state if the FIN bit was set, preparing for the next message.
-*   **Masking Enforcement (Server-side):** The server-side protocol (`ws_server`) explicitly checks if incoming frames (from the client) have the mask bit set. If not, it considers this a protocol error, sends a Close frame (status 1002), and terminates the connection.
+*   **Masking Enforcement (Both directions):**
+    *   Server-side protocol (`ws_server`) rejects unmasked incoming client frames.
+    *   Client-side protocol (`ws_client`) rejects masked incoming server frames.
+*   **Strict frame validation:**
+    *   Rejects reserved/unknown opcodes.
+    *   Rejects non-zero RSV bits when no extension is negotiated.
+    *   Rejects fragmented control frames.
+    *   Rejects control-frame payloads over 125 bytes and control frames using extended length encoding.
+    *   Rejects non-minimal payload-length encodings (e.g. 126 used for values `< 126`).
+    *   Rejects 64-bit lengths with MSB set.
+    *   Rejects invalid close payload (length `1`), invalid close status codes, and invalid UTF-8 in close reason.
+    *   Rejects invalid UTF-8 in text messages.
+*   **Outgoing control-frame constraint:** serialization rejects `Ping`/`Pong`/`Close` payloads above 125 bytes with `std::invalid_argument`.
 
 ## Events Dispatched
 
@@ -37,7 +50,7 @@ When the protocol handler successfully parses a frame, it triggers an event on t
     *   `event.ws`: A reference to the internal `qb::http::ws::Message` object, allowing access to `fin_rsv_opcode` to differentiate between Text (0x81) and Binary (0x82).
 *   **`on(qb::http::ws::protocol::ping&& event)`:** Triggered for Ping frames.
     *   `event.size`, `event.data`: Ping payload.
-    *   The protocol automatically sends a Pong response with the same payload **before** dispatching this event.
+    *   The protocol automatically sends a Pong response with the same payload.
 *   **`on(qb::http::ws::protocol::pong&& event)`:** Triggered for Pong frames.
     *   `event.size`, `event.data`: Pong payload.
 *   **`on(qb::http::ws::protocol::close&& event)`:** Triggered for Close frames.

@@ -169,6 +169,8 @@ private:
     connect_complete_fn       _connect_complete;
     frame_complete_fn         _frame_complete;
     close_complete_fn         _close_complete;
+    bool                      _disconnected{false};
+    bool                      _close_sent{false};
 
     // Bound when the caller asks for a per-operation receive cap, so that
     // unread frames cannot grow without bound if the consumer is slow.
@@ -216,6 +218,9 @@ private:
             auto cb = std::exchange(_frame_complete, {});
             cb(std::move(frame));
             return;
+        }
+        if (_pending_cap == 0u) {
+            return; // Buffering explicitly disabled.
         }
         if (_pending_frames.size() >= _pending_cap) {
             // Drop the oldest frame rather than the newest — callers who
@@ -313,6 +318,11 @@ public:
 
     void
     on(closed &&event) {
+        if (!_close_sent) {
+            ::qb::http::ws::Message echo = event.ws;
+            _close_sent = true;
+            *this << echo;
+        }
         deliver_frame(make_close_frame(event.size, event.data));
         if (_close_complete) {
             auto cb = std::exchange(_close_complete, {});
@@ -322,6 +332,8 @@ public:
 
     void
     on(disconnected &&) {
+        _disconnected = true;
+        _close_sent = false;
         // Fire pending completions with a failure so coroutines don't hang
         // when the transport is yanked from under them. `coro_client` is a
         // leaf type: no further forwarding to the base's CRTP `on()` is
@@ -362,6 +374,19 @@ public:
             std::chrono::milliseconds timeout = std::chrono::milliseconds{0}) {
         return qb::http::async::make_awaiter<ConnectResult>(
             [this, remote, timeout](auto complete) {
+                if (_frame_complete) {
+                    IncomingFrame frame;
+                    frame.kind = IncomingFrame::Kind::Disconnected;
+                    auto cb = std::exchange(_frame_complete, {});
+                    cb(std::move(frame));
+                }
+                if (_close_complete) {
+                    auto cb = std::exchange(_close_complete, {});
+                    cb(CloseResult{false});
+                }
+                _pending_frames.clear();
+                _disconnected = false;
+                _close_sent = false;
                 install_connect_complete(std::move(complete));
                 base::connect(remote, static_cast<int>(timeout.count()));
             });
@@ -397,13 +422,19 @@ public:
                     complete(std::move(frame));
                     return;
                 }
+                if (_disconnected) {
+                    IncomingFrame frame;
+                    frame.kind = IncomingFrame::Kind::Disconnected;
+                    complete(std::move(frame));
+                    return;
+                }
                 install_frame_complete(std::move(complete));
             });
     }
 
     /**
-     * @brief Queue a Close frame and suspend until it has been handed over to
-     *        the transport (peer may still take time to echo).
+     * @brief Queue a Close frame and suspend until the close handshake
+     *        completes (peer echo or transport drop).
      *
      * The underlying TCP disconnection is **not** forced here — callers that
      * want a hard tear-down after the close should invoke `disconnect()`.
@@ -415,6 +446,16 @@ public:
                 std::string_view reason = "closed normally") {
         return qb::http::async::make_awaiter<CloseResult>(
             [this, status, reason = std::string(reason)](auto complete) {
+                if (_close_complete) {
+                    throw std::logic_error(
+                        "qb::http::ws::coro_client::close_async(): another "
+                        "close awaiter is already pending");
+                }
+                if (_disconnected) {
+                    complete(CloseResult{true});
+                    return;
+                }
+                _close_sent = true;
                 _close_complete = std::move(complete);
                 MessageClose msg(status, reason);
                 *this << msg;
@@ -545,6 +586,7 @@ private:
     bool                                  _upgraded{false};
     bool                                  _run_spawned{false};
     bool                                  _disconnected{false};
+    bool                                  _close_sent{false};
 
     Self &
     self() noexcept {
@@ -762,9 +804,12 @@ public:
             frame.close_reason.assign(event.data + 2, event.size - 2);
         }
 
-        // Echo (the ws_protocol will not do it automatically once `Self`
-        // defines `on(close)` — we own the RFC echo from here on).
-        *this << event.ws;
+        // Echo only when the peer initiated the close. If we already sent a
+        // close, this frame is the peer's echo and must not be echoed again.
+        if (!_close_sent) {
+            *this << event.ws;
+            _close_sent = true;
+        }
 
         deliver_frame(std::move(frame));
 
@@ -777,6 +822,7 @@ public:
     void
     on(qb::io::async::event::disconnected &&) {
         _disconnected = true;
+        _close_sent = false;
 
         IncomingFrame frame;
         frame.kind = IncomingFrame::Kind::Disconnected;
@@ -836,10 +882,16 @@ public:
                 std::string_view reason = "closed normally") {
         return qb::http::async::make_awaiter<CloseResult>(
             [this, status, reason = std::string(reason)](auto complete) {
+                if (_close_complete) {
+                    throw std::logic_error(
+                        "qb::http::ws::coro_session::close_async(): another "
+                        "close awaiter is already pending");
+                }
                 if (_disconnected) {
                     complete(CloseResult{true});
                     return;
                 }
+                _close_sent = true;
                 _close_complete = std::move(complete);
                 MessageClose msg(status, reason);
                 *this << msg;

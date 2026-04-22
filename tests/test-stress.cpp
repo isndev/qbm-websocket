@@ -127,6 +127,9 @@ reset_test_state() {
     connection_errors  = 0;
     protocol_errors    = 0;
     active_connections = 0;
+    message_count      = 0;
+    client_count       = 0;
+    error_count        = 0;
     server_ready       = false;
     test_complete      = false;
 }
@@ -142,6 +145,19 @@ force_test_completion() {
     std::unique_lock<std::mutex> lock(test_mutex);
     test_complete = true;
     test_cv.notify_all();
+}
+
+bool
+decrement_client_count_once() {
+    std::size_t current = client_count.load(std::memory_order_relaxed);
+    while (current > 0) {
+        if (client_count.compare_exchange_weak(current, current - 1,
+                                               std::memory_order_relaxed,
+                                               std::memory_order_relaxed)) {
+            return (current - 1) == 0;
+        }
+    }
+    return false;
 }
 
 /**
@@ -330,7 +346,7 @@ public:
 class StressServer : public qb::io::use<StressServer>::tcp::server<StressServerClient> {
 private:
     std::size_t _expected_messages; ///< Expected number of messages for the test
-    std::atomic<std::size_t> _total_received{0}; ///< Counter for received messages
+    std::size_t _total_received{0}; ///< Counter for received messages
     Timer                    _server_timer;      ///< Timer for tracking server uptime
 
 public:
@@ -362,7 +378,12 @@ public:
      */
     void
     on(qb::io::async::event::disconnected &) {
-        --active_connections;
+        std::size_t current = active_connections.load(std::memory_order_relaxed);
+        while (current > 0 &&
+               !active_connections.compare_exchange_weak(current, current - 1,
+                                                         std::memory_order_relaxed,
+                                                         std::memory_order_relaxed)) {
+        }
 
         // Signal test completion when all connections are closed and messages were
         // processed
@@ -430,6 +451,7 @@ private:
     std::size_t       _max_message_size  = 0;
     int               _client_id         = 0;
     Timer             _timer;
+    bool              _close_sent        = false;
 
 public:
     // Define protocol types with fully qualified namespaces
@@ -478,6 +500,9 @@ public:
     void
     send_messages() {
         if (_messages_sent >= _messages_to_send) {
+            if (_close_sent) {
+                return;
+            }
             // All messages sent, close connection
             std::cout << "Client " << _client_id
                       << " sending close message after sending " << _messages_sent
@@ -485,6 +510,7 @@ public:
             qb::http::ws::MessageClose msg(qb::http::ws::CloseStatus::Normal);
             msg.masked = true;
             *this << msg;
+            _close_sent = true;
             return;
         }
 
@@ -567,10 +593,6 @@ public:
         if (_messages_received >= _messages_to_send) {
             std::cout << "Client " << _client_id << " completed all "
                       << _messages_to_send << " messages" << std::endl;
-            // If all clients are done, signal test completion
-            if (--client_count == 0) {
-                force_test_completion();
-            }
         }
     }
 
@@ -597,25 +619,13 @@ public:
     void
     on(qb::io::async::event::disconnected const &event) {
         std::cout << "Client " << _client_id << " disconnected" << std::endl;
-
-        // Safely decrement client count - only if it's greater than 0
-        std::size_t current = client_count.load();
-        if (current > 0) {
-            while (!client_count.compare_exchange_weak(current, current - 1) &&
-                   current > 0) {
-                // Keep trying if the compare_exchange failed and value is still positive
-            }
-
-            std::cout << "Decremented client_count to " << client_count.load()
+        if (decrement_client_count_once()) {
+            std::cout << "Last client disconnected, forcing test completion"
                       << std::endl;
-
-            // Signal test completion if this was the last client
-            if (client_count.load() == 0) {
-                std::cout << "Last client disconnected, forcing test completion"
-                          << std::endl;
-                force_test_completion();
-            }
+            force_test_completion();
         }
+        std::cout << "Decremented client_count to " << client_count.load()
+                  << std::endl;
     }
 
     /**
@@ -701,7 +711,7 @@ run_stress_test(std::size_t num_clients, std::size_t msgs_per_client,
             if (!server_ready) {
                 std::cout << "Client " << client_id << " timed out waiting for server"
                           << std::endl;
-                if (--client_count == 0) {
+                if (decrement_client_count_once()) {
                     force_test_completion();
                 }
                 return;
@@ -732,20 +742,6 @@ run_stress_test(std::size_t num_clients, std::size_t msgs_per_client,
                               << " messages" << std::endl;
                 }
 
-                // Make sure all client messages are processed before disconnecting
-                if (client.messages_sent_count() < msgs_per_client) {
-                    // If we haven't sent all messages yet, send the remaining ones
-                    for (std::size_t j = client.messages_sent_count();
-                         j < msgs_per_client; ++j) {
-                        client.send_messages();
-                        // Give some time for the messages to be processed
-                        for (int k = 0; k < 5; ++k) {
-                            qb::io::async::run(EVRUN_NOWAIT);
-                            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-                        }
-                    }
-                }
-
                 // Add a delay to process any pending messages before disconnect
                 for (int i = 0; i < 10; ++i) {
                     qb::io::async::run(EVRUN_NOWAIT);
@@ -757,7 +753,7 @@ run_stress_test(std::size_t num_clients, std::size_t msgs_per_client,
                 std::cout << "Client " << client_id << " failed to connect" << std::endl;
                 ++connection_errors;
                 // Decrement client count to avoid hanging the test
-                if (--client_count == 0) {
+                if (decrement_client_count_once()) {
                     force_test_completion();
                 }
             }

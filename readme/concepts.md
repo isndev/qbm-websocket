@@ -57,6 +57,8 @@ The opcode determines the frame's purpose:
 *   **`0xA` (Pong):** The response to a Ping frame. Must contain the same payload data as the Ping it's responding to.
 *   **`0xB` - `0xF`:** Reserved for future control frames.
 
+`qbm-websocket` rejects reserved/unknown opcodes at parse time.
+
 **QB Implementation:**
 *   The `qb::http::ws::opcode` enum defines constants for common opcodes (with FIN bit typically set).
 *   The `Message` subclasses (`MessageText`, `MessageBinary`, `MessagePing`, etc.) set the appropriate opcode during construction.
@@ -70,10 +72,19 @@ Frames sent from the server to the client MUST NOT be masked.
 The masking process involves XORing each byte of the payload data with a byte from the 4-byte masking key. The key byte used cycles: `payload[i] XOR key[i % 4]`.
 
 **QB Implementation:**
-*   Client-side: The `qb::http::ws::Message::masked` flag is `true` by default. The serialization logic (`fill_masked_message`) generates a random 4-byte key, includes it in the frame header, and applies the XOR mask to the payload before sending.
-*   Server-side: The `protocol` class checks the mask bit. If set, it reads the masking key from the header and applies the XOR mask to the received payload data to recover the original data before dispatching the `message`/`ping`/etc. event.
+*   Client-side: `WebSocket<T>::operator<<` enforces masking for all outgoing WebSocket frames automatically (`client -> server`).
+*   Server-side: outgoing frames are emitted unmasked (`server -> client`).
+*   Receiver-side: the parser enforces directionality (server rejects unmasked client frames; client rejects masked server frames) and only then applies XOR unmasking when required.
 
-## 5. Message Types (`qb::http::ws::Message`)
+## 5. Close, UTF-8, and Control Limits
+
+`qbm-websocket` enforces RFC constraints on control/close path:
+
+*   Close codes must be in `[1000..4999]` and not in the reserved set (`1004`, `1005`, `1006`, `1015`) when sent.
+*   Text payload and close reason must be valid UTF-8 (invalid payloads trigger protocol close).
+*   Control-frame payload is limited to 125 bytes; outgoing oversized control frames are rejected at serialization with `std::invalid_argument`.
+
+## 6. Message Types (`qb::http::ws::Message`)
 
 The `qbm-websocket` module uses a class hierarchy for constructing messages:
 

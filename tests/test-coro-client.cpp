@@ -148,6 +148,46 @@ public:
     void on(IOSession &) {}
 };
 
+std::atomic<std::size_t> g_coro_close_echoes{0};
+
+class CloseEchoServer;
+
+class CloseEchoClient
+    : public qb::io::use<CloseEchoClient>::tcp::client<CloseEchoServer>
+    , public qb::io::use<CloseEchoClient>::timeout {
+public:
+    using Protocol    = qb::http::protocol<CloseEchoClient>;
+    using WS_Protocol = qb::http::ws::protocol<CloseEchoClient>;
+
+    explicit CloseEchoClient(IOServer &s) : client(s) {}
+
+    void on(Protocol::request &&req) {
+        if (!this->switch_protocol<WS_Protocol>(*this, req)) {
+            this->disconnect();
+            return;
+        }
+        qb::http::ws::MessageClose msg(
+            qb::http::ws::CloseStatus::GoingAway, "server-closing");
+        *this << msg;
+        this->setTimeout(200);
+    }
+
+    void on(WS_Protocol::close &&) {
+        ++g_coro_close_echoes;
+        this->disconnect();
+    }
+
+    void on(qb::io::async::event::timeout const &) { this->disconnect(); }
+
+    void on(WS_Protocol::message &&) {}
+};
+
+class CloseEchoServer
+    : public qb::io::use<CloseEchoServer>::tcp::server<CloseEchoClient> {
+public:
+    void on(IOSession &) {}
+};
+
 // ---------------------------------------------------------------------------
 // Test fixture — runs the echo server on a dedicated thread so the coroutine
 // client's own listener can drive the TCP client side independently.
@@ -286,6 +326,21 @@ TEST_F(CoroClientTest, ReceiveUnblocksOnDisconnect) {
     EXPECT_EQ(kind, qb::http::ws::IncomingFrame::Kind::Disconnected);
 }
 
+TEST_F(CoroClientTest, ReceiveAfterDisconnectWithPendingCapZeroDoesNotHang) {
+    ServerThread<DisconnectingServer> server{19936};
+
+    auto task = [&]() -> qb::io::async::task<qb::http::ws::IncomingFrame::Kind> {
+        qb::http::ws::coro_client ws;
+        ws.set_pending_cap(0);
+        (void) co_await ws.connect("ws://localhost:19936/");
+        auto frame = co_await ws.receive();
+        co_return frame.kind;
+    };
+
+    auto kind = qb::http::ws::run_sync(task());
+    EXPECT_EQ(kind, qb::http::ws::IncomingFrame::Kind::Disconnected);
+}
+
 TEST_F(CoroClientTest, CloseAsyncCompletesAfterPeerEcho) {
     ServerThread<EchoServer> server{19935};
 
@@ -300,6 +355,25 @@ TEST_F(CoroClientTest, CloseAsyncCompletesAfterPeerEcho) {
     };
 
     EXPECT_TRUE(qb::http::ws::run_sync(task()));
+}
+
+TEST_F(CoroClientTest, EchoesPeerCloseFrame) {
+    g_coro_close_echoes = 0;
+    ServerThread<CloseEchoServer> server{19937};
+
+    auto task = [&]() -> qb::io::async::task<qb::http::ws::IncomingFrame::Kind> {
+        qb::http::ws::coro_client ws;
+        const auto c = co_await ws.connect("ws://localhost:19937/");
+        EXPECT_TRUE(c.ok);
+        if (!c.ok) co_return qb::http::ws::IncomingFrame::Kind::Disconnected;
+        auto frame = co_await ws.receive();
+        co_return frame.kind;
+    };
+
+    const auto kind = qb::http::ws::run_sync(task());
+    EXPECT_TRUE(kind == qb::http::ws::IncomingFrame::Kind::Close ||
+                kind == qb::http::ws::IncomingFrame::Kind::Disconnected);
+    EXPECT_LE(g_coro_close_echoes.load(), 1u);
 }
 
 } // namespace

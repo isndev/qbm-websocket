@@ -110,6 +110,9 @@ qb::io::async::task<void> login_and_greet() {
 - Queues a Close frame and suspends until the peer echoes it or the
   transport drops first. The reason string is UTF-8 and capped at 123
   bytes (RFC 6455 control frame limit).
+- If the peer closes and the transport tears down very quickly, your
+  next observable frame may be `Disconnected` instead of `Close`; both
+  outcomes are valid terminal states.
 - Reserved close codes (`1004`, `1005`, `1006`, `1015`, or anything
   outside `[1000..4999]`) raise `std::invalid_argument` at construction
   time — building such a frame is always a programming bug.

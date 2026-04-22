@@ -39,6 +39,7 @@
 #include <chrono>
 #include <random>
 #include <functional>
+#include <algorithm>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -316,11 +317,18 @@ struct MessageClose : Message {
         fin_rsv_opcode = static_cast<unsigned char>(opcode::Close);
 
         // Clip reason if the resulting payload would exceed the control-frame
-        // limit (125 bytes = 2 status + 123 reason). Truncation is rare and
-        // only happens on badly-sized reasons, so we don't bother with UTF-8
-        // boundary alignment here — `is_utf8` on the receiver will flag it.
+        // limit (125 bytes = 2 status + 123 reason). Keep the truncated
+        // prefix UTF-8 clean: cutting through a multi-byte sequence would
+        // otherwise generate an invalid close reason on the wire.
         if (reason.length() > 123) {
             reason = reason.substr(0, 123);
+            while (!reason.empty() && !is_utf8(reason)) {
+                reason.remove_suffix(1);
+            }
+        }
+        if (!reason.empty() && !is_utf8(reason)) {
+            throw std::invalid_argument(
+                "qb::http::ws::MessageClose: close reason must be valid UTF-8");
         }
 
         _data.reserve(2 + reason.size());
@@ -336,7 +344,7 @@ struct MessageClose : Message {
  *
  * This function creates a secure random key for use in the WebSocket opening handshake.
  */
-std::string generateKey() noexcept;
+std::string generateKey();
 
 } // namespace qb::http::ws
 
@@ -428,6 +436,26 @@ struct event_message {
     ::qb::http::ws::Message &ws;
 };
 
+[[nodiscard]] constexpr bool
+is_valid_frame_opcode(unsigned char frame_opcode) noexcept {
+    switch (frame_opcode) {
+        case ::qb::http::ws::opcode::Continuation:
+        case ::qb::http::ws::opcode::_Text:
+        case ::qb::http::ws::opcode::_Binary:
+        case ::qb::http::ws::opcode::_Close:
+        case ::qb::http::ws::opcode::_Ping:
+        case ::qb::http::ws::opcode::_Pong:
+            return true;
+        default:
+            return false;
+    }
+}
+
+[[nodiscard]] inline bool
+is_valid_received_close_code(std::uint16_t code) noexcept {
+    return ::qb::http::ws::is_sendable_close_code(code);
+}
+
 /**
  * @class base
  * @brief Base implementation of the WebSocket protocol
@@ -488,6 +516,33 @@ class base : public qb::io::async::AProtocol<IO_> {
             current_frame_message.masked = true; // For client sending pong reply etc.
 
         if (frame_opcode == ::qb::http::ws::opcode::_Close) {
+            if (current_frame_message.size() == 1u) {
+                fail_connection(::qb::http::ws::CloseStatus::ProtocolError,
+                                "Close frame payload of 1 byte is invalid");
+                return;
+            }
+            if (current_frame_message.size() >= 2u) {
+                const auto *payload =
+                    reinterpret_cast<const unsigned char *>(
+                        current_frame_message._data.cbegin());
+                const auto close_code =
+                    static_cast<std::uint16_t>((payload[0] << 8u) | payload[1]);
+                if (!is_valid_received_close_code(close_code)) {
+                    fail_connection(::qb::http::ws::CloseStatus::ProtocolError,
+                                    "Invalid close status code");
+                    return;
+                }
+                if (current_frame_message.size() > 2u &&
+                    !::qb::http::ws::is_utf8(
+                        {current_frame_message._data.cbegin() + 2,
+                         current_frame_message.size() - 2})) {
+                    fail_connection(
+                        ::qb::http::ws::CloseStatus::DataNotConsistent,
+                        "Invalid UTF-8 in close reason");
+                    return;
+                }
+            }
+
             // Let any previously queued frames flush before the close is
             // observed by the peer. We used to `_io.out().reset()` here which
             // silently dropped them (W20). The close frame is simply appended
@@ -545,6 +600,15 @@ class base : public qb::io::async::AProtocol<IO_> {
         }
 
         if (this->ok()) {
+            if (_max_payload_size > 0u) {
+                if (_message.size() > _max_payload_size ||
+                    current_frame_message.size() >
+                        (_max_payload_size - _message.size())) {
+                    fail_connection(::qb::http::ws::CloseStatus::MessageTooBig,
+                                    "Payload size exceeds configured limit");
+                    return;
+                }
+            }
             // Append the payload of the current frame to the main reassembly buffer
             _message._data << current_frame_message._data;
 
@@ -628,6 +692,11 @@ public:
             _fin_rsv_opcode  = first_bytes[0];
             const auto frame_opcode = _fin_rsv_opcode & rfc::OPCODE_MASK;
 
+            if (!is_valid_frame_opcode(frame_opcode)) {
+                return fail_connection(::qb::http::ws::CloseStatus::ProtocolError,
+                                       "Reserved or unknown opcode");
+            }
+
             // RFC 5.2: RSV bits MUST be 0 unless an extension is negotiated.
             if ((_fin_rsv_opcode & rfc::RSV_BITS_MASK) != 0) {
                 return fail_connection(::qb::http::ws::CloseStatus::ProtocolError, "RSV bits must be 0");
@@ -647,6 +716,11 @@ public:
                 if (!_message.masked) {
                     // RFC 5.1: A server MUST close the connection if it receives an unmasked frame.
                     return fail_connection(::qb::http::ws::CloseStatus::ProtocolError, "Message from client not masked");
+                }
+            } else {
+                if (_message.masked) {
+                    // RFC 5.1: A client MUST close the connection if it receives a masked frame from server.
+                    return fail_connection(::qb::http::ws::CloseStatus::ProtocolError, "Message from server must not be masked");
                 }
             }
             _parsed += 2u;
@@ -681,6 +755,21 @@ public:
                 for (std::size_t c = 0u; c < num_bytes; c++)
                     length += static_cast<std::size_t>(length_bytes[c])
                               << (8u * (num_bytes - 1u - c));
+
+                if (payload_indicator == rfc::PAYLOAD_LEN_64_BIT &&
+                    (length_bytes[0] & 0x80u) != 0u) {
+                    return fail_connection(::qb::http::ws::CloseStatus::ProtocolError,
+                                           "Most significant bit of 64-bit payload length must be 0");
+                }
+            }
+
+            if (payload_indicator == rfc::PAYLOAD_LEN_16_BIT && length < 126u) {
+                return fail_connection(::qb::http::ws::CloseStatus::ProtocolError,
+                                       "Non-minimal payload length encoding");
+            }
+            if (payload_indicator == rfc::PAYLOAD_LEN_64_BIT && length <= 0xFFFFu) {
+                return fail_connection(::qb::http::ws::CloseStatus::ProtocolError,
+                                       "Non-minimal payload length encoding");
             }
             _expected_size = length;
 
@@ -791,6 +880,45 @@ icontains_lower(std::string_view hay, std::string_view needle_lower) noexcept {
     return false;
 }
 
+/// Case-insensitive token containment for comma-separated header fields
+/// (RFC 7230 token lists such as `Connection`).
+[[nodiscard]] inline bool
+has_token_ci(std::string_view header_value, std::string_view expected_token) noexcept {
+    std::size_t pos = 0;
+    while (pos <= header_value.size()) {
+        const auto comma = header_value.find(',', pos);
+        const auto end = (comma == std::string_view::npos) ? header_value.size() : comma;
+
+        auto token = header_value.substr(pos, end - pos);
+        const auto first = token.find_first_not_of(" \t");
+        if (first != std::string_view::npos) {
+            token.remove_prefix(first);
+            const auto last = token.find_last_not_of(" \t");
+            token = token.substr(0, last + 1);
+            if (iequal_ascii(token, expected_token)) {
+                return true;
+            }
+        }
+
+        if (comma == std::string_view::npos) {
+            break;
+        }
+        pos = comma + 1;
+    }
+    return false;
+}
+
+/// Trim ASCII optional whitespace (OWS) around a header value.
+[[nodiscard]] inline std::string_view
+trim_ows(std::string_view sv) noexcept {
+    const auto first = sv.find_first_not_of(" \t");
+    if (first == std::string_view::npos) {
+        return {};
+    }
+    const auto last = sv.find_last_not_of(" \t");
+    return sv.substr(first, last - first + 1);
+}
+
 /// Constant-time equality for two byte strings of identical length.
 [[nodiscard]] inline bool
 constant_time_equal(std::string_view a, std::string_view b) noexcept {
@@ -824,11 +952,28 @@ class ws_server : public ws_internal::base<IO_> {
                                 HttpResponse      &response) {
         if (!request.upgrade)
             return false;
-
-        const std::string_view ws_key  = request.header("Sec-WebSocket-Key");
-        const std::string_view version = request.header("Sec-WebSocket-Version");
-        if (ws_key.empty())
+        if (!detail::iequal_ascii(request.header("Upgrade"), "websocket"))
             return false;
+        if (!detail::has_token_ci(request.header("Connection"), "Upgrade"))
+            return false;
+
+        const std::string_view ws_key_raw  =
+            detail::trim_ows(request.header("Sec-WebSocket-Key"));
+        const std::string_view version =
+            detail::trim_ows(request.header("Sec-WebSocket-Version"));
+        if (ws_key_raw.empty())
+            return false;
+        // RFC 6455 §4.2.1: client key is a base64 value of 16 random bytes.
+        if (ws_key_raw.size() != 24u)
+            return false;
+        const std::string decoded_key =
+            crypto::base64::decode(std::string(ws_key_raw));
+        if (decoded_key.size() != 16u)
+            return false;
+        if (crypto::base64::encode(decoded_key) != ws_key_raw)
+            return false;
+
+        const std::string_view ws_key = ws_key_raw;
         if (!detail::iequal_ascii(version, "13"))
             return false;
 
@@ -908,10 +1053,11 @@ class ws_client : public ws_internal::base<IO_> {
             return false;
         if (!detail::iequal_ascii(http.header("Upgrade"), "websocket"))
             return false;
-        if (!detail::icontains_lower(http.header("Connection"), "upgrade"))
+        if (!detail::has_token_ci(http.header("Connection"), "Upgrade"))
             return false;
 
-        const std::string_view res_key = http.header("Sec-WebSocket-Accept");
+        const std::string_view res_key =
+            detail::trim_ows(http.header("Sec-WebSocket-Accept"));
         if (res_key.empty())
             return false;
 
@@ -987,6 +1133,7 @@ class WebSocket
     /// `Sec-WebSocket-Protocol` in the `101` response, or empty when the
     /// server did not advertise any). Populated in `on(http_response)`.
     std::string _negotiated_subprotocol;
+    bool _close_sent{false};
 
 private:
     T& derived() noexcept { return *static_cast<T*>(this); }
@@ -1001,6 +1148,35 @@ private:
             return {};
         const auto last = sv.find_last_not_of(kOws);
         return sv.substr(first, last - first + 1);
+    }
+
+    /// Build a RFC-compatible Host header value from a URI.
+    /// - Keep default ports implicit (80 for ws/http, 443 for wss/https).
+    /// - Bracket IPv6 literals when needed.
+    [[nodiscard]] static std::string
+    make_host_header_value(::qb::io::uri const &uri) {
+        std::string host = std::string(uri.host());
+        const bool already_bracketed_ipv6 =
+            host.size() >= 2 && host.front() == '[' && host.back() == ']';
+        if (!already_bracketed_ipv6 && host.find(':') != std::string::npos) {
+            host = "[" + host + "]";
+        }
+
+        const std::string_view port = uri.port();
+        if (port.empty()) {
+            return host;
+        }
+
+        const std::string_view scheme = uri.scheme();
+        const bool is_default_ws_port =
+            ((scheme == "ws" || scheme == "http") && port == "80");
+        const bool is_default_wss_port =
+            ((scheme == "wss" || scheme == "https") && port == "443");
+        if (!is_default_ws_port && !is_default_wss_port) {
+            host += ":";
+            host += port;
+        }
+        return host;
     }
 
 public:
@@ -1090,6 +1266,7 @@ public:
     close(CloseStatus status = CloseStatus::Normal,
           std::string_view reason = "closed normally") {
         MessageClose msg(status, reason);
+        _close_sent = true;
         *this << msg;
     }
 
@@ -1146,6 +1323,7 @@ public:
         this->setTimeout(0);
         _remote                 = remote;
         _negotiated_subprotocol.clear();
+        _close_sent             = false;
         ::qb::io::async::tcp::connect<typename Transport::transport_io_type>(
             remote,
             [this](auto &&transport) {
@@ -1159,7 +1337,7 @@ public:
                     this->start();
 
                     http::WebSocketRequest request(_ws_key);
-                    request.headers()["host"].emplace_back(std::string(_remote.host()));
+                    request.headers()["host"].emplace_back(make_host_header_value(_remote));
                     request.uri() = _remote;
 
                     if (!_offered_subprotocols.empty()) {
@@ -1225,14 +1403,41 @@ public:
             trim_ows(event.header("Sec-WebSocket-Protocol"));
         if (!selected.empty()) {
             const auto comma = selected.find(',');
-            _negotiated_subprotocol.assign(
-                trim_ows(selected.substr(0, comma)));
+            const std::string_view selected_token =
+                trim_ows(selected.substr(0, comma));
+            const bool has_multiple_tokens = (comma != std::string_view::npos);
+
+            // RFC 6455 §4.2.2: server must return exactly one subprotocol and it
+            // must be one the client actually offered.
+            if (has_multiple_tokens || _offered_subprotocols.empty()) {
+                if constexpr (qb::has_on<T, error>) {
+                    derived().on(error{});
+                }
+                this->disconnect();
+                return;
+            }
+
+            const bool was_offered =
+                std::any_of(_offered_subprotocols.begin(),
+                            _offered_subprotocols.end(),
+                            [&](const std::string &offered) {
+                                return offered == selected_token;
+                            });
+            if (!was_offered) {
+                if constexpr (qb::has_on<T, error>) {
+                    derived().on(error{});
+                }
+                this->disconnect();
+                return;
+            }
+
+            _negotiated_subprotocol.assign(selected_token);
         }
 
         if constexpr (qb::has_on<T, connected>) {
             derived().on(connected{});
-            this->setTimeout(_ping_interval);
         }
+        this->setTimeout(_ping_interval);
     }
 
     /**
@@ -1280,6 +1485,11 @@ public:
      */
     void
     on(closed &&event) {
+        if (!_close_sent) {
+            Message echo = event.ws;
+            _close_sent = true;
+            *this << echo;
+        }
         if constexpr (qb::has_on<T, closed>) {
             derived().on(std::forward<closed>(event));
         }
@@ -1293,6 +1503,7 @@ public:
      */
     void
     on(disconnected &&event) {
+        _close_sent = false;
         derived().on(std::forward<disconnected>(event));
     }
 
@@ -1319,15 +1530,14 @@ public:
     template <typename ToSend>
     WebSocket &operator<<(ToSend &&msg) {
         if constexpr (std::is_base_of_v<Message, std::decay_t<ToSend>>) {
-            // RFC 5.1: Client-to-server frames MUST be masked.
-            // RFC 5.5: Control frames MUST NOT be masked.
-            // Here we are the client, so we must mask data frames.
-            const auto opcode = msg.fin_rsv_opcode & ::qb::protocol::ws_internal::rfc::OPCODE_MASK;
-            if (opcode == ::qb::http::ws::opcode::_Text || opcode == ::qb::http::ws::opcode::_Binary || opcode == ::qb::http::ws::opcode::Continuation) {
-                msg.masked = true;
-            } else {
-                msg.masked = false; // Ensure control frames are not masked
+            if constexpr (std::is_same_v<std::decay_t<ToSend>, MessageClose>) {
+                _close_sent = true;
             }
+            // RFC 6455 §5.1: all client->server frames (including control) MUST be masked.
+            std::decay_t<ToSend> outbound(std::forward<ToSend>(msg));
+            outbound.masked = true;
+            ::qb::io::async::tcp::client<WebSocket<T, Transport>, Transport>::operator<<(std::move(outbound));
+            return *this;
         }
         ::qb::io::async::tcp::client<WebSocket<T, Transport>, Transport>::operator<<(std::forward<ToSend>(msg));
         return *this;

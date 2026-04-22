@@ -26,6 +26,7 @@ set(WEBSOCKET_TESTS
         coro-integration
         coro-negative
         framing-edge
+        api-hardening
 )
 
 # Register each test

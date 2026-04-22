@@ -54,6 +54,16 @@ target_link_libraries(your_target PRIVATE qbm::http qbm::websocket)
 -   **High Performance**: Built on `qb-io`'s non-blocking event loop to handle thousands of concurrent connections with low overhead.
 -   **Flexible Client APIs**: Choose between a simple, modern callback-based client or a powerful, stateful inheritance-based one.
 -   **Secure by Default**: Full, easy-to-use support for Secure WebSockets (WSS) over TLS.
+-   **Hardened RFC Validation**: Strict handshake and framing checks (masking direction, reserved opcodes, close-code validity, UTF-8 validation, control-frame size constraints).
+
+## Protocol Hardening (Current Behavior)
+
+The module enforces a strict RFC 6455 interpretation on both receive and send paths:
+
+- Handshake validation checks `Upgrade` / `Connection` token semantics, `Sec-WebSocket-Version == 13`, and canonical base64 `Sec-WebSocket-Key` (16-byte decoded nonce).
+- Incoming frames reject reserved opcodes, non-zero RSV bits (without negotiated extension), non-minimal payload-length encodings, invalid close payloads/codes, and invalid UTF-8 in text/close reason.
+- Client/server masking direction is enforced (`client -> server` masked, `server -> client` unmasked).
+- Outgoing control frames (`Ping`, `Pong`, `Close`) are capped to 125-byte payload, otherwise serialization throws `std::invalid_argument`.
 
 ## Core Concept: The HTTP Upgrade
 
