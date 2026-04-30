@@ -37,7 +37,6 @@
 #include <qb/io/async/tcp/connector.h>
 #include <qb/io/crypto.h>
 #include <chrono>
-#include <random>
 #include <functional>
 #include <algorithm>
 #include <string>
@@ -500,10 +499,21 @@ class base : public qb::io::async::AProtocol<IO_> {
                 close_msg.masked = true;
             }
             this->_io << close_msg;
+            notify_protocol_error();
             this->not_ok();
             _message.reset();
+            _data_opcode = 0;
         }
         return this->_io.in().size();
+    }
+
+    void
+    notify_protocol_error() {
+        if constexpr (requires { typename IO_::error; }) {
+            if constexpr (qb::has_on<IO_, typename IO_::error>) {
+                this->_io.on(typename IO_::error{});
+            }
+        }
     }
 
     void
@@ -828,12 +838,18 @@ public:
     reset() noexcept final {
         _message.reset();
         _expected_size = _parsed = _fin_rsv_opcode = 0;
+        _data_opcode = 0;
     }
 };
 
 } // namespace ws_internal
 
 namespace detail {
+
+[[nodiscard]] inline unsigned char
+ascii_to_lower(unsigned char c) noexcept {
+    return (c >= 'A' && c <= 'Z') ? static_cast<unsigned char>(c + ('a' - 'A')) : c;
+}
 
 // RFC 6455 §1.3 — GUID appended to the client key before SHA-1. Kept as a
 // string_view so we can concatenate without allocating a separate literal.
@@ -857,27 +873,27 @@ iequal_ascii(std::string_view a, std::string_view b) noexcept {
     for (std::size_t i = 0; i < a.size(); ++i) {
         const auto ca = static_cast<unsigned char>(a[i]);
         const auto cb = static_cast<unsigned char>(b[i]);
-        if (std::tolower(ca) != std::tolower(cb)) return false;
+        if (ascii_to_lower(ca) != ascii_to_lower(cb)) return false;
     }
     return true;
 }
 
-/// Case-insensitive substring-contains (needle must be lowercase).
 [[nodiscard]] inline bool
-icontains_lower(std::string_view hay, std::string_view needle_lower) noexcept {
-    if (needle_lower.size() > hay.size()) return false;
-    for (std::size_t i = 0; i + needle_lower.size() <= hay.size(); ++i) {
-        bool match = true;
-        for (std::size_t j = 0; j < needle_lower.size(); ++j) {
-            const auto c = static_cast<unsigned char>(hay[i + j]);
-            if (std::tolower(c) != static_cast<unsigned char>(needle_lower[j])) {
-                match = false;
-                break;
-            }
-        }
-        if (match) return true;
-    }
-    return false;
+is_token_char(unsigned char c) noexcept {
+    return (c >= 'A' && c <= 'Z') ||
+           (c >= 'a' && c <= 'z') ||
+           (c >= '0' && c <= '9') ||
+           c == '!' || c == '#' || c == '$' || c == '%' || c == '&' ||
+           c == '\'' || c == '*' || c == '+' || c == '-' || c == '.' ||
+           c == '^' || c == '_' || c == '`' || c == '|' || c == '~';
+}
+
+[[nodiscard]] inline bool
+is_valid_token(std::string_view value) noexcept {
+    return !value.empty() &&
+           std::all_of(value.begin(), value.end(), [](unsigned char c) {
+               return is_token_char(c);
+           });
 }
 
 /// Case-insensitive token containment for comma-separated header fields
@@ -966,8 +982,12 @@ class ws_server : public ws_internal::base<IO_> {
         // RFC 6455 §4.2.1: client key is a base64 value of 16 random bytes.
         if (ws_key_raw.size() != 24u)
             return false;
-        const std::string decoded_key =
-            crypto::base64::decode(std::string(ws_key_raw));
+        std::string decoded_key;
+        try {
+            decoded_key = crypto::base64::decode(std::string(ws_key_raw));
+        } catch (...) {
+            return false;
+        }
         if (decoded_key.size() != 16u)
             return false;
         if (crypto::base64::encode(decoded_key) != ws_key_raw)
@@ -1010,6 +1030,8 @@ public:
             endpoint = http.uri().path();
             return;
         }
+        res.status() = qb::http::status::BAD_REQUEST;
+        this->_io << res;
         this->not_ok();
     }
 
@@ -1020,6 +1042,7 @@ public:
             endpoint = request.uri().path();
             return;
         }
+        response.status() = qb::http::status::BAD_REQUEST;
         this->not_ok();
     }
 };
@@ -1287,6 +1310,12 @@ public:
      */
     void
     set_subprotocols(std::vector<std::string> protocols) {
+        for (const auto &protocol : protocols) {
+            if (!::qb::protocol::detail::is_valid_token(protocol)) {
+                throw std::invalid_argument(
+                    "qb::http::ws::WebSocket::set_subprotocols: invalid subprotocol token");
+            }
+        }
         _offered_subprotocols = std::move(protocols);
     }
 
@@ -1296,6 +1325,10 @@ public:
      */
     void
     add_subprotocol(std::string protocol) {
+        if (!::qb::protocol::detail::is_valid_token(protocol)) {
+            throw std::invalid_argument(
+                "qb::http::ws::WebSocket::add_subprotocol: invalid subprotocol token");
+        }
         _offered_subprotocols.emplace_back(std::move(protocol));
     }
 

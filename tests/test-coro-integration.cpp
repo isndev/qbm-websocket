@@ -95,6 +95,14 @@ struct IntegrationFixture {
             ws_server   = std::make_unique<IntegrationWsServer>();
 
             http_server->router().get(
+                "/ping",
+                [](std::shared_ptr<
+                   qb::http::Context<qb::http::DefaultSession>> ctx) {
+                    ctx->response().body() = "pong";
+                    ctx->complete();
+                });
+
+            http_server->router().get(
                 "/ws",
                 [this](std::shared_ptr<
                        qb::http::Context<qb::http::DefaultSession>> ctx) {
@@ -202,21 +210,34 @@ TEST_F(CoroIntegrationTest, RouterHandoffAndCoroEcho) {
 TEST_F(CoroIntegrationTest, NonUpgradeRouteStaysOnHttp) {
     IntegrationFixture fixture;
 
-    // Install an extra route on the live server. Safe because
-    // `IntegrationFixture` kept both pointers alive on its thread, and
-    // `router().get` is cheap and thread-safe for the compile path the
-    // test harness already exercises.
-    //
-    // NOTE: We don't hit this route via the coroutine client; we use a
-    // regular `qb::http::GET` instead.
     qb::http::Request request;
     request.uri()     = qb::io::uri{"http://localhost:" +
-                                std::to_string(kPort) + "/nope"};
+                                std::to_string(kPort) + "/ping"};
     request.method()  = qb::http::method::GET;
 
     auto resp = qb::http::run_sync(qb::http::GET(request)).response;
-    // No such route — qb::http::Router replies with 404 by default.
-    EXPECT_EQ(resp.status(), qb::http::status::NOT_FOUND);
+    EXPECT_EQ(resp.status(), qb::http::status::OK);
+    EXPECT_EQ(resp.body().template as<std::string>(), "pong");
+}
+
+TEST_F(CoroIntegrationTest, PersistentHttp1ClientCanReuseConnectionBeforeUpgrade) {
+    IntegrationFixture fixture;
+
+    auto client = qb::http1::make_client("http://localhost:" +
+                                         std::to_string(kPort));
+    qb::http::Request first;
+    first.uri() = qb::io::uri{"/ping"};
+    first.method() = qb::http::method::GET;
+    qb::http::Request second = first;
+
+    auto first_response = qb::http::run_sync(client->push_request(std::move(first)));
+    auto second_response = qb::http::run_sync(client->push_request(std::move(second)));
+
+    EXPECT_EQ(first_response.status(), qb::http::status::OK);
+    EXPECT_EQ(second_response.status(), qb::http::status::OK);
+    EXPECT_EQ(first_response.body().template as<std::string>(), "pong");
+    EXPECT_EQ(second_response.body().template as<std::string>(), "pong");
+    EXPECT_TRUE(client->is_connected());
 }
 
 } // namespace

@@ -188,8 +188,8 @@ public:
     void
     sendHandshake() {
         qb::http::WebSocketRequest r(ws_key);
-        r.uri() = "ws://localhost:9998/";
-        r.headers()["Host"].emplace_back("localhost:9998");
+        r.uri() = "ws://localhost:20110/";
+        r.headers()["Host"].emplace_back("localhost:20110");
         std::cout << "Sending WebSocket handshake request" << std::endl;
         *this << r;
     }
@@ -326,7 +326,7 @@ TEST(WebSocketClient, EchoTest) {
 
     // Create and start echo server
     EchoServer server;
-    ASSERT_EQ(SocketStatus::Done, server.transport().listen_v6(9998));
+    ASSERT_EQ(SocketStatus::Done, server.transport().listen_v6(20110));
     server.start();
 
     // Create client in a separate thread
@@ -334,7 +334,7 @@ TEST(WebSocketClient, EchoTest) {
         async::init();
 
         WebSocketTestClient client;
-        ASSERT_EQ(SocketStatus::Done, client.transport().connect_v6("localhost", 9998));
+        ASSERT_EQ(SocketStatus::Done, client.transport().connect_v6("localhost", 20110));
         client.start();
         client.sendHandshake();
 
@@ -380,7 +380,7 @@ TEST(WebSocketClient, CallbackClientTest) {
 
     // Create and start echo server on different port
     EchoServer server;
-    ASSERT_EQ(SocketStatus::Done, server.transport().listen_v6(9999));
+    ASSERT_EQ(SocketStatus::Done, server.transport().listen_v6(20111));
     server.start();
 
     // Create client in a separate thread
@@ -458,7 +458,7 @@ TEST(WebSocketClient, CallbackClientTest) {
         });
 
         // Connect to the server
-        qb::io::uri uri("ws://localhost:9999/");
+        qb::io::uri uri("ws://localhost:20111/");
         ws_client.connect(uri);
 
         // Wait for connection to be established

@@ -484,8 +484,8 @@ public:
     void
     send_handshake() {
         qb::http::WebSocketRequest r(_ws_key);
-        r.uri() = "ws://localhost:9997/";
-        r.headers()["Host"].emplace_back("localhost:9997");
+        r.uri() = "ws://localhost:20150/";
+        r.headers()["Host"].emplace_back("localhost:20150");
         std::cout << "Client " << _client_id << " sending handshake" << std::endl;
         *this << r;
     }
@@ -681,11 +681,11 @@ run_stress_test(std::size_t num_clients, std::size_t msgs_per_client,
 
     // Start server
     StressServer server(total_expected_msgs);
-    server.transport().listen_v6(9997);
+    server.transport().listen_v6(20150);
     server.start();
     server.signal_ready();
 
-    std::cout << "Server started on port 9997, expecting " << total_expected_msgs
+    std::cout << "Server started on port 20150, expecting " << total_expected_msgs
               << " messages" << std::endl;
 
     // Create client threads
@@ -722,7 +722,7 @@ run_stress_test(std::size_t num_clients, std::size_t msgs_per_client,
             StressClient client(client_id, msgs_per_client, msg_size);
 
             // Connect to server
-            auto status = client.transport().connect_v6("::1", 9997);
+            auto status = client.transport().connect_v6("::1", 20150);
             if (status == qb::io::SocketStatus::Done) {
                 client.start();
                 client.send_handshake();
@@ -929,7 +929,7 @@ TEST(Stress, RAPID_CONNECTIONS) {
 
     // Start server
     StressServer server;
-    server.transport().listen_v6(9997);
+    server.transport().listen_v6(20150);
     server.start();
     server.signal_ready();
 
@@ -958,7 +958,7 @@ TEST(Stress, RAPID_CONNECTIONS) {
                     // Create new client for each connection
                     StressClient client(i * 100 + j, 1, MESSAGE_SIZE_SMALL);
 
-                    auto status = client.transport().connect_v6("::1", 9997);
+                    auto status = client.transport().connect_v6("::1", 20150);
                     if (status == qb::io::SocketStatus::Done) {
                         ++connected_count;
                         client.start();
@@ -1030,7 +1030,7 @@ TEST(Stress, LONG_LIVED_CONNECTIONS) {
 
     // Start server - Using regular TCP transport
     StressServer server;
-    server.transport().listen_v6(9997);
+    server.transport().listen_v6(20150);
     server.start();
     server.signal_ready();
 
@@ -1062,7 +1062,7 @@ TEST(Stress, LONG_LIVED_CONNECTIONS) {
 
             StressClient client(i, 2, MESSAGE_SIZE_SMALL); // 2 messages per client
 
-            auto status = client.transport().connect_v6("::1", 9997);
+            auto status = client.transport().connect_v6("::1", 20150);
             if (status == qb::io::SocketStatus::Done) {
                 client.start();
                 client.send_handshake();

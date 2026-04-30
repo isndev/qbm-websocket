@@ -445,7 +445,7 @@ public:
     void
     send_handshake() {
         qb::http::WebSocketRequest r(ws_key);
-        r.uri() = "http://localhost:9998/";
+        r.uri() = "http://localhost:20170/";
         *this << r;
         current_state_ = Connecting;
     }
@@ -756,7 +756,7 @@ TEST(Robustness, LARGE_MESSAGES) {
 
     // Setup server
     RobustServer server;
-    server.transport().listen_v6(9998);
+    server.transport().listen_v6(20170);
     server.start();
     server_active = true;
     std::cout << "Server started" << std::endl;
@@ -767,7 +767,7 @@ TEST(Robustness, LARGE_MESSAGES) {
         RobustClient client;
 
         // Connect to server
-        if (client.transport().connect_v6("::1", 9998) != SocketStatus::Done) {
+        if (client.transport().connect_v6("::1", 20170) != SocketStatus::Done) {
             std::cerr << "Could not connect to server" << std::endl;
             return;
         }
@@ -955,7 +955,7 @@ public:
 
         // Create and send the handshake
         qb::http::WebSocketRequest r(ws_key);
-        r.uri() = "http://localhost:9998/";
+        r.uri() = "http://localhost:20170/";
         *this << r;
 
         current_state_ = Connecting;
@@ -1139,15 +1139,15 @@ TEST(Robustness, PING_PONG) {
 
     std::cout << "=== Starting PING_PONG test with debug mode ===" << std::endl;
 
-    // Start the server on port 9999
+    // Start the server on port 20171
     RobustServer server;
-    server.transport().listen_v6(9999);
+    server.transport().listen_v6(20171);
     server.start();
-    std::cout << "Server started on port 9999" << std::endl;
+    std::cout << "Server started on port 20171" << std::endl;
 
     // Create the client
     DebugClient client;
-    if (!client.connect_to("::1", 9999)) {
+    if (!client.connect_to("::1", 20171)) {
         FAIL() << "Failed to connect to server";
         return;
     }

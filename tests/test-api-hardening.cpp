@@ -7,6 +7,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstring>
 #include <string>
 #include <stdexcept>
 #include <thread>
@@ -252,7 +253,8 @@ public:
         // Close frame payload length = 1 is invalid by RFC 6455 §5.5.1.
         const std::array<char, 3> frame{
             {static_cast<char>(0x88u), 0x01, static_cast<char>(0x00)}};
-        this->transport().write(frame.data(), static_cast<int>(frame.size()));
+        std::memcpy(this->out().allocate_back(frame.size()), frame.data(), frame.size());
+        this->ready_to_write();
     }
 
     void on(WS_Protocol::message &&) {}
@@ -288,7 +290,8 @@ public:
              0x05,
              static_cast<char>(0x03), static_cast<char>(0xE8),
              static_cast<char>(0xED), static_cast<char>(0xA0), static_cast<char>(0x80)}};
-        this->transport().write(frame.data(), static_cast<int>(frame.size()));
+        std::memcpy(this->out().allocate_back(frame.size()), frame.data(), frame.size());
+        this->ready_to_write();
     }
 
     void on(WS_Protocol::message &&) {}
@@ -361,7 +364,7 @@ TEST(WebSocketApiHardening, ClientControlFramesAreAcceptedAsMaskedByServerParser
     qb::io::async::init();
     g_control_ping_received = 0;
 
-    constexpr int port = 9992;
+    constexpr int port = 20123;
     ControlProbeServer server;
     server.transport().listen_v4(port);
     server.start();
@@ -375,7 +378,7 @@ TEST(WebSocketApiHardening, ClientControlFramesAreAcceptedAsMaskedByServerParser
         client << ping; // Must be masked by client operator<<.
     });
     client.on_disconnected([&](auto &) { disconnected = true; });
-    client.connect(qb::io::uri("ws://localhost:9992/path"), 1000);
+    client.connect(qb::io::uri("ws://localhost:20123/path"), 1000);
 
     ASSERT_TRUE(run_until([&]() {
         return g_control_ping_received > 0 || disconnected;
@@ -388,18 +391,18 @@ TEST(WebSocketApiHardening, ClientControlFramesAreAcceptedAsMaskedByServerParser
 TEST(WebSocketApiHardening, ServerRejectsMalformedSecWebSocketKey) {
     qb::io::async::init();
 
-    constexpr int port = 9990;
+    constexpr int port = 20121;
     HandshakeValidationServer server;
     server.transport().listen_v4(port);
     server.start();
 
     qb::io::tcp::socket sock;
-    ASSERT_EQ(sock.connect(qb::io::uri{"tcp://localhost:9990"}), 0);
+    ASSERT_EQ(sock.connect(qb::io::uri{"tcp://localhost:20121"}), 0);
     (void) sock.set_nonblocking(true);
 
     const std::string request =
         "GET /path HTTP/1.1\r\n"
-        "Host: localhost:9990\r\n"
+        "Host: localhost:20121\r\n"
         "Upgrade: websocket\r\n"
         "Connection: Upgrade\r\n"
         "Sec-WebSocket-Key: aaaaaaaaaaaaaaaaaaaaaaaa\r\n"
@@ -428,10 +431,53 @@ TEST(WebSocketApiHardening, ServerRejectsMalformedSecWebSocketKey) {
     }
 }
 
+TEST(WebSocketApiHardening, ServerRejectsNonBase64SecWebSocketKey) {
+    qb::io::async::init();
+
+    constexpr int port = 20131;
+    HandshakeValidationServer server;
+    server.transport().listen_v4(port);
+    server.start();
+
+    qb::io::tcp::socket sock;
+    ASSERT_EQ(sock.connect(qb::io::uri{"tcp://localhost:20131"}), 0);
+    (void) sock.set_nonblocking(true);
+
+    const std::string request =
+        "GET /path HTTP/1.1\r\n"
+        "Host: localhost:20131\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Key: !!!!!!!!!!!!!!!!!!!!!!!!\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "\r\n";
+    sock.write(request.data(), static_cast<int>(request.size()));
+
+    std::string response;
+    for (int i = 0; i < 500; ++i) {
+        qb::io::async::run(EVRUN_NOWAIT);
+        char buf[512];
+        const int n = sock.read(buf, sizeof(buf));
+        if (n > 0) {
+            response.append(buf, static_cast<std::size_t>(n));
+            if (response.find("\r\n\r\n") != std::string::npos) break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+
+    EXPECT_EQ(response.find("101 Switching Protocols"), std::string::npos)
+        << "Server must reject non-base64 Sec-WebSocket-Key";
+    if (!response.empty()) {
+        EXPECT_NE(response.find("400"), std::string::npos)
+            << "Expected a BAD_REQUEST style response, got:\n"
+            << response;
+    }
+}
+
 TEST(WebSocketApiHardening, HandshakeHostHeaderIncludesNonDefaultPortAndIpv6Brackets) {
     qb::io::async::init();
 
-    constexpr int port = 9996;
+    constexpr int port = 20127;
     SinkServer server;
     server.transport().listen_v6(port);
     server.start();
@@ -442,18 +488,18 @@ TEST(WebSocketApiHardening, HandshakeHostHeaderIncludesNonDefaultPortAndIpv6Brac
         captured_host = std::string(event.request.header("host"));
     });
 
-    client.connect(qb::io::uri("ws://[::1]:9996/path"), 1000);
+    client.connect(qb::io::uri("ws://[::1]:20127/path"), 1000);
 
     ASSERT_TRUE(run_until([&captured_host]() { return !captured_host.empty(); }))
         << "WebSocket client did not reach request emission phase";
 
-    EXPECT_EQ(captured_host, "[::1]:9996");
+    EXPECT_EQ(captured_host, "[::1]:20127");
 }
 
 TEST(WebSocketApiHardening, ClientRejectsServerSubprotocolNotOfferedByClient) {
     qb::io::async::init();
 
-    constexpr int port = 9994;
+    constexpr int port = 20125;
     BadSubprotocolServer server;
     server.transport().listen_v6(port);
     server.start();
@@ -467,7 +513,7 @@ TEST(WebSocketApiHardening, ClientRejectsServerSubprotocolNotOfferedByClient) {
     client.on_connected([&connected](auto &) { connected = true; });
     client.on_error([&errored](auto &) { errored = true; });
     client.on_disconnected([&disconnected](auto &) { disconnected = true; });
-    client.connect(qb::io::uri("ws://[::1]:9994/path"), 1000);
+    client.connect(qb::io::uri("ws://[::1]:20125/path"), 1000);
 
     ASSERT_TRUE(run_until([&]() { return errored || connected || disconnected; }))
         << "WebSocket client produced no terminal signal";
@@ -479,7 +525,7 @@ TEST(WebSocketApiHardening, ClientRejectsServerSubprotocolNotOfferedByClient) {
 TEST(WebSocketApiHardening, ClientRejectsMalformedConnectionTokenInHandshakeResponse) {
     qb::io::async::init();
 
-    constexpr int port = 9991;
+    constexpr int port = 20122;
     BadConnectionTokenServer server;
     server.transport().listen_v4(port);
     server.start();
@@ -492,7 +538,7 @@ TEST(WebSocketApiHardening, ClientRejectsMalformedConnectionTokenInHandshakeResp
     client.on_connected([&connected](auto &) { connected = true; });
     client.on_error([&errored](auto &) { errored = true; });
     client.on_disconnected([&disconnected](auto &) { disconnected = true; });
-    client.connect(qb::io::uri("ws://localhost:9991/path"), 1000);
+    client.connect(qb::io::uri("ws://localhost:20122/path"), 1000);
 
     ASSERT_TRUE(run_until([&]() { return errored || connected || disconnected; }))
         << "WebSocket client produced no terminal signal";
@@ -504,7 +550,7 @@ TEST(WebSocketApiHardening, ClientRejectsMalformedConnectionTokenInHandshakeResp
 TEST(WebSocketApiHardening, ClientRejectsMaskedFrameFromServer) {
     qb::io::async::init();
 
-    constexpr int port = 9993;
+    constexpr int port = 20124;
     MaskedFrameServer server;
     server.transport().listen_v4(port);
     server.start();
@@ -519,7 +565,7 @@ TEST(WebSocketApiHardening, ClientRejectsMaskedFrameFromServer) {
     client.on_error([&errored](auto &) { errored = true; });
     client.on_message([&messages](auto &) { ++messages; });
     client.on_disconnected([&disconnected](auto &) { disconnected = true; });
-    client.connect(qb::io::uri("ws://localhost:9993/path"), 1000);
+    client.connect(qb::io::uri("ws://localhost:20124/path"), 1000);
 
     ASSERT_TRUE(run_until([&]() { return errored || disconnected || messages > 0; }))
         << "Client did not surface any terminal reaction to masked server frame";
@@ -531,7 +577,7 @@ TEST(WebSocketApiHardening, ClientRejectsMaskedFrameFromServer) {
 TEST(WebSocketApiHardening, ClientRejectsReservedOpcodeFromServer) {
     qb::io::async::init();
 
-    constexpr int port = 9997;
+    constexpr int port = 20128;
     ReservedOpcodeServer server;
     server.transport().listen_v4(port);
     server.start();
@@ -546,7 +592,7 @@ TEST(WebSocketApiHardening, ClientRejectsReservedOpcodeFromServer) {
     client.on_error([&errored](auto &) { errored = true; });
     client.on_message([&messages](auto &) { ++messages; });
     client.on_disconnected([&disconnected](auto &) { disconnected = true; });
-    client.connect(qb::io::uri("ws://localhost:9997/path"), 1000);
+    client.connect(qb::io::uri("ws://localhost:20128/path"), 1000);
 
     ASSERT_TRUE(run_until([&]() { return errored || disconnected || messages > 0; }))
         << "Client did not react to reserved opcode frame";
@@ -558,7 +604,7 @@ TEST(WebSocketApiHardening, ClientRejectsReservedOpcodeFromServer) {
 TEST(WebSocketApiHardening, ClientRejectsInvalidClosePayloadLengthOne) {
     qb::io::async::init();
 
-    constexpr int port = 9998;
+    constexpr int port = 20129;
     InvalidClosePayloadServer server;
     server.transport().listen_v4(port);
     server.start();
@@ -573,7 +619,7 @@ TEST(WebSocketApiHardening, ClientRejectsInvalidClosePayloadLengthOne) {
     client.on_error([&errored](auto &) { errored = true; });
     client.on_closed([&closes](auto &) { ++closes; });
     client.on_disconnected([&disconnected](auto &) { disconnected = true; });
-    client.connect(qb::io::uri("ws://localhost:9998/path"), 1000);
+    client.connect(qb::io::uri("ws://localhost:20129/path"), 1000);
 
     ASSERT_TRUE(run_until([&]() { return errored || disconnected || closes > 0; }))
         << "Client did not react to invalid close payload";
@@ -585,7 +631,7 @@ TEST(WebSocketApiHardening, ClientRejectsInvalidClosePayloadLengthOne) {
 TEST(WebSocketApiHardening, ClientRejectsInvalidUtf8InCloseReason) {
     qb::io::async::init();
 
-    constexpr int port = 9999;
+    constexpr int port = 20130;
     InvalidCloseReasonUtf8Server server;
     server.transport().listen_v4(port);
     server.start();
@@ -598,7 +644,7 @@ TEST(WebSocketApiHardening, ClientRejectsInvalidUtf8InCloseReason) {
     client.on_error([&errored](auto &) { errored = true; });
     client.on_closed([&closes](auto &) { ++closes; });
     client.on_disconnected([&disconnected](auto &) { disconnected = true; });
-    client.connect(qb::io::uri("ws://localhost:9999/path"), 1000);
+    client.connect(qb::io::uri("ws://localhost:20130/path"), 1000);
 
     ASSERT_TRUE(run_until([&]() { return errored || disconnected || closes > 0; }))
         << "Client did not react to invalid UTF-8 close reason";
@@ -623,11 +669,25 @@ TEST(WebSocketApiHardening, RejectsOversizedOutgoingPongFrame) {
     EXPECT_THROW(out << pong, std::invalid_argument);
 }
 
+TEST(WebSocketApiHardening, RejectsInvalidSubprotocolTokens) {
+    qb::http::ws::client client;
+
+    EXPECT_THROW(client.add_subprotocol(""), std::invalid_argument);
+    EXPECT_THROW(client.add_subprotocol("chat v1"), std::invalid_argument);
+    EXPECT_THROW(client.add_subprotocol("chat,v1"), std::invalid_argument);
+    EXPECT_THROW(client.add_subprotocol(std::string("bad\nproto", 9)),
+                 std::invalid_argument);
+    EXPECT_THROW(client.set_subprotocols({"chat.v1", "bad proto"}),
+                 std::invalid_argument);
+
+    EXPECT_NO_THROW(client.set_subprotocols({"chat.v1", "superchat-v2"}));
+}
+
 TEST(WebSocketApiHardening, ClientEchoesPeerCloseFrame) {
     qb::io::async::init();
     g_close_echo_received = 0;
 
-    constexpr int port = 9989;
+    constexpr int port = 20120;
     CloseEchoProbeServer server;
     server.transport().listen_v4(port);
     server.start();
@@ -635,7 +695,7 @@ TEST(WebSocketApiHardening, ClientEchoesPeerCloseFrame) {
     bool disconnected = false;
     qb::http::ws::client client;
     client.on_disconnected([&disconnected](auto &) { disconnected = true; });
-    client.connect(qb::io::uri("ws://localhost:9989/path"), 1000);
+    client.connect(qb::io::uri("ws://localhost:20120/path"), 1000);
 
     ASSERT_TRUE(run_until([&]() {
         return disconnected || g_close_echo_received > 0;

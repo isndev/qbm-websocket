@@ -292,6 +292,56 @@ read_some(qb::io::tcp::socket &sock, std::size_t max,
     return out;
 }
 
+void perform_upgrade(qb::io::tcp::socket &sock, int port) {
+    const std::string port_s = std::to_string(port);
+    const std::string upgrade =
+        "GET /edge HTTP/1.1\r\n"
+        "Host: localhost:" + port_s + "\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "\r\n";
+    sock.write(upgrade.data(), static_cast<int>(upgrade.size()));
+
+    std::string response;
+    for (int i = 0; i < 500; ++i) {
+        char buf[512];
+        int  n = sock.read(buf, sizeof(buf));
+        if (n > 0) response.append(buf, static_cast<std::size_t>(n));
+        if (response.find("\r\n\r\n") != std::string::npos) break;
+        std::this_thread::sleep_for(5ms);
+    }
+    ASSERT_NE(response.find("101"), std::string::npos)
+        << "handshake failed:\n" << response;
+}
+
+void expect_close_code_after_frames(
+    int port,
+    std::vector<std::vector<std::uint8_t>> const &frames,
+    qb::http::ws::CloseStatus expected_status) {
+    ServerThread<EchoServer> server{port};
+
+    qb::io::tcp::socket sock;
+    const auto rc = sock.connect(qb::io::uri{std::string("tcp://localhost:") + std::to_string(port)});
+    ASSERT_EQ(rc, 0);
+    (void) sock.set_nonblocking(true);
+    perform_upgrade(sock, port);
+
+    for (auto const &frame : frames) {
+        sock.write(reinterpret_cast<const char *>(frame.data()),
+                   static_cast<int>(frame.size()));
+    }
+
+    const std::string got = read_some(sock, 128);
+    const auto close_code = extract_close_code(got);
+    ASSERT_TRUE(close_code.has_value())
+        << "server did not send a parseable close frame: size=" << got.size();
+    EXPECT_EQ(*close_code, static_cast<std::uint16_t>(expected_status));
+
+    sock.close();
+}
+
 } // namespace
 
 TEST_F(FramingEdgeTest, InterleavedPingDuringFragmented) {
@@ -362,6 +412,50 @@ TEST_F(FramingEdgeTest, InterleavedPingDuringFragmented) {
     EXPECT_EQ(static_cast<std::uint8_t>(got[4]), 0x05u) << "frame#2 len7";
     EXPECT_EQ(got.substr(5, 5), "Hello")
         << "server did not reassemble the fragmented text message";
+
+    sock.close();
+}
+
+TEST_F(FramingEdgeTest, ZeroLengthTextFrameIsDeliveredAndEchoed) {
+    ServerThread<EchoServer> server{19981};
+
+    qb::io::tcp::socket sock;
+    const auto rc = sock.connect(qb::io::uri{"tcp://localhost:19981"});
+    ASSERT_EQ(rc, 0);
+    (void) sock.set_nonblocking(true);
+    perform_upgrade(sock, 19981);
+
+    auto frame = make_client_frame(0x81, ""); // FIN + text, empty payload
+    sock.write(reinterpret_cast<const char *>(frame.data()),
+               static_cast<int>(frame.size()));
+
+    const std::string got = read_some(sock, 2);
+    ASSERT_EQ(got.size(), 2u)
+        << "empty text echo should be a 2-byte zero-length frame";
+    EXPECT_EQ(static_cast<std::uint8_t>(got[0]), 0x81u);
+    EXPECT_EQ(static_cast<std::uint8_t>(got[1]), 0x00u);
+
+    sock.close();
+}
+
+TEST_F(FramingEdgeTest, ZeroLengthPingGetsZeroLengthPong) {
+    ServerThread<EchoServer> server{19982};
+
+    qb::io::tcp::socket sock;
+    const auto rc = sock.connect(qb::io::uri{"tcp://localhost:19982"});
+    ASSERT_EQ(rc, 0);
+    (void) sock.set_nonblocking(true);
+    perform_upgrade(sock, 19982);
+
+    auto frame = make_client_frame(0x89, ""); // FIN + ping, empty payload
+    sock.write(reinterpret_cast<const char *>(frame.data()),
+               static_cast<int>(frame.size()));
+
+    const std::string got = read_some(sock, 2);
+    ASSERT_EQ(got.size(), 2u)
+        << "empty ping should receive a 2-byte empty pong";
+    EXPECT_EQ(static_cast<std::uint8_t>(got[0]), 0x8Au);
+    EXPECT_EQ(static_cast<std::uint8_t>(got[1]), 0x00u);
 
     sock.close();
 }
@@ -466,6 +560,54 @@ TEST_F(FramingEdgeTest, NonMinimalPayloadLengthEncodingIsRejected) {
               static_cast<std::uint16_t>(qb::http::ws::CloseStatus::ProtocolError));
 
     sock.close();
+}
+
+TEST_F(FramingEdgeTest, RsvBitsAreRejected) {
+    expect_close_code_after_frames(
+        19976,
+        {make_client_frame(0xC1, "x")}, // FIN + RSV1 + text
+        qb::http::ws::CloseStatus::ProtocolError);
+}
+
+TEST_F(FramingEdgeTest, FragmentedControlFrameIsRejected) {
+    expect_close_code_after_frames(
+        19977,
+        {make_client_frame(0x09, "p")}, // Ping with FIN=0
+        qb::http::ws::CloseStatus::ProtocolError);
+}
+
+TEST_F(FramingEdgeTest, ContinuationWithoutInitialDataFrameIsRejected) {
+    expect_close_code_after_frames(
+        19978,
+        {make_client_frame(0x80, "x")}, // FIN + continuation, no prior data frame
+        qb::http::ws::CloseStatus::ProtocolError);
+}
+
+TEST_F(FramingEdgeTest, NewDataFrameBeforeFinalContinuationIsRejected) {
+    expect_close_code_after_frames(
+        19979,
+        {
+            make_client_frame(0x01, "hel"), // Text, FIN=0
+            make_client_frame(0x82, "bin")  // Binary, FIN=1 before continuation
+        },
+        qb::http::ws::CloseStatus::ProtocolError);
+}
+
+TEST_F(FramingEdgeTest, PayloadLength64MostSignificantBitIsRejected) {
+    std::vector<std::uint8_t> bad;
+    bad.reserve(2 + 8 + 4);
+    bad.push_back(0x81u);          // FIN + text
+    bad.push_back(0x80u | 127u);   // masked + extended64
+    bad.push_back(0x80u);          // invalid MSB set
+    for (int i = 0; i < 7; ++i) {
+        bad.push_back(0x00u);
+    }
+    bad.insert(bad.end(), {0x12u, 0x34u, 0x56u, 0x78u});
+
+    expect_close_code_after_frames(
+        19980,
+        {bad},
+        qb::http::ws::CloseStatus::ProtocolError);
 }
 
 TEST_F(FramingEdgeTest, InvalidUtf8TextFrameIsRejectedWith1007) {

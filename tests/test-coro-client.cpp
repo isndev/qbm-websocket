@@ -23,7 +23,9 @@
  */
 
 #include <atomic>
+#include <array>
 #include <chrono>
+#include <cstring>
 #include <gtest/gtest.h>
 #include <string>
 #include <thread>
@@ -144,6 +146,44 @@ public:
 
 class DisconnectingServer
     : public qb::io::use<DisconnectingServer>::tcp::server<DisconnectingClient> {
+public:
+    void on(IOSession &) {}
+};
+
+class InvalidFrameServer;
+
+class InvalidFrameClient
+    : public qb::io::use<InvalidFrameClient>::tcp::client<InvalidFrameServer> {
+public:
+    using Protocol    = qb::http::protocol<InvalidFrameClient>;
+    using WS_Protocol = qb::http::ws::protocol<InvalidFrameClient>;
+
+    explicit InvalidFrameClient(IOServer &s)
+        : client(s) {}
+
+    void
+    on(Protocol::request &&req) {
+        if (!this->switch_protocol<WS_Protocol>(*this, req)) {
+            this->disconnect();
+            return;
+        }
+
+        // Server-to-client frames must never be masked. This frame is
+        // deliberately invalid and should trip the client's protocol-error path.
+        constexpr std::array<char, 7> frame{
+            static_cast<char>(0x81u), static_cast<char>(0x80u | 1u),
+            static_cast<char>(0x12u), static_cast<char>(0x34u),
+            static_cast<char>(0x56u), static_cast<char>(0x78u),
+            static_cast<char>('x' ^ 0x12u)};
+        std::memcpy(this->out().allocate_back(frame.size()), frame.data(), frame.size());
+        this->ready_to_write();
+    }
+
+    void on(WS_Protocol::message &&) {}
+};
+
+class InvalidFrameServer
+    : public qb::io::use<InvalidFrameServer>::tcp::server<InvalidFrameClient> {
 public:
     void on(IOSession &) {}
 };
@@ -333,6 +373,22 @@ TEST_F(CoroClientTest, ReceiveAfterDisconnectWithPendingCapZeroDoesNotHang) {
         qb::http::ws::coro_client ws;
         ws.set_pending_cap(0);
         (void) co_await ws.connect("ws://localhost:19936/");
+        auto frame = co_await ws.receive();
+        co_return frame.kind;
+    };
+
+    auto kind = qb::http::ws::run_sync(task());
+    EXPECT_EQ(kind, qb::http::ws::IncomingFrame::Kind::Disconnected);
+}
+
+TEST_F(CoroClientTest, ReceiveUnblocksOnProtocolError) {
+    ServerThread<InvalidFrameServer> server{19938};
+
+    auto task = [&]() -> qb::io::async::task<qb::http::ws::IncomingFrame::Kind> {
+        qb::http::ws::coro_client ws;
+        const auto c = co_await ws.connect("ws://localhost:19938/");
+        EXPECT_TRUE(c.ok);
+        if (!c.ok) co_return qb::http::ws::IncomingFrame::Kind::Disconnected;
         auto frame = co_await ws.receive();
         co_return frame.kind;
     };

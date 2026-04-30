@@ -291,9 +291,20 @@ public:
 
     void
     on(error &&) {
+        _disconnected = true;
         if (_connect_complete) {
             auto cb = std::exchange(_connect_complete, {});
             cb(ConnectResult{false});
+        }
+        if (_frame_complete) {
+            IncomingFrame frame;
+            frame.kind = IncomingFrame::Kind::Disconnected;
+            auto cb    = std::exchange(_frame_complete, {});
+            cb(std::move(frame));
+        }
+        if (_close_complete) {
+            auto cb = std::exchange(_close_complete, {});
+            cb(CloseResult{false});
         }
     }
 
