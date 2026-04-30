@@ -336,9 +336,12 @@ public:
 };
 
 std::string
-raw_handshake_request(std::string_view key, std::string_view version = "13") {
+raw_handshake_request(std::string_view key,
+                      std::string_view version = "13",
+                      std::string_view method = "GET") {
     std::string request;
-    request += "GET / HTTP/1.1\r\n";
+    request += method;
+    request += " / HTTP/1.1\r\n";
     request += "Host: localhost:20160\r\n";
     request += "Upgrade: websocket\r\n";
     request += "Connection: Upgrade\r\n";
@@ -419,6 +422,18 @@ TEST(Security, INVALID_VERSION) {
     EXPECT_NE(response.find("400"), std::string::npos) << response;
     EXPECT_EQ(connection_count, 0) << "No WebSocket connection should be established";
     EXPECT_GE(rejection_count, 1) << "Invalid WebSocket version should cause rejection";
+}
+
+TEST(Security, INVALID_METHOD) {
+    SecurityServerThread server{20160};
+    RawSocket            socket{20160};
+
+    socket.send_all(raw_handshake_request(qb::http::ws::generateKey(), "13", "POST"));
+
+    const auto response = read_http_response(socket);
+    EXPECT_NE(response.find("400"), std::string::npos) << response;
+    EXPECT_EQ(connection_count, 0) << "No WebSocket connection should be established";
+    EXPECT_GE(rejection_count, 1) << "Non-GET WebSocket handshake must be rejected";
 }
 
 /**

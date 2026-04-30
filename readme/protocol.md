@@ -38,7 +38,7 @@ The core logic resides in `qb::protocol::ws_internal::base<IO_>`. Key aspects:
     *   Rejects 64-bit lengths with MSB set.
     *   Rejects invalid close payload (length `1`), invalid close status codes, and invalid UTF-8 in close reason.
     *   Rejects invalid UTF-8 in text messages.
-*   **Outgoing control-frame constraint:** serialization rejects `Ping`/`Pong`/`Close` payloads above 125 bytes with `std::invalid_argument`.
+*   **Strict outgoing serialization:** serialization rejects RSV bits, reserved/unknown opcodes, fragmented control frames, and `Ping`/`Pong`/`Close` payloads above 125 bytes with `std::invalid_argument`.
 
 ## Events Dispatched
 

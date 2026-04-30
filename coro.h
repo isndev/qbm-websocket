@@ -750,16 +750,19 @@ public:
                 response.status() = qb::http::status::BAD_REQUEST;
             }
             *this << response;
-            this->disconnect();
+            this->close_after_deliver();
             return false;
         }
 
         if (!this->template switch_protocol<WS_Protocol>(self(), request,
                                                          response)) {
-            // `switch_protocol` populated `response` with whatever state
-            // it got to (may be unset on header failure); we just drop the
-            // connection — the HTTP side has no meaningful reply to send.
-            this->disconnect();
+            // `switch_protocol` sets BAD_REQUEST on handshake failures; deliver
+            // it before closing so clients get a concrete HTTP rejection.
+            if (static_cast<int>(response.status()) == 0) {
+                response.status() = qb::http::status::BAD_REQUEST;
+            }
+            *this << response;
+            this->close_after_deliver();
             return false;
         }
 

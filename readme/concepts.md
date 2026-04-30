@@ -57,7 +57,8 @@ The opcode determines the frame's purpose:
 *   **`0xA` (Pong):** The response to a Ping frame. Must contain the same payload data as the Ping it's responding to.
 *   **`0xB` - `0xF`:** Reserved for future control frames.
 
-`qbm-websocket` rejects reserved/unknown opcodes at parse time.
+`qbm-websocket` rejects reserved/unknown opcodes at parse time and also
+refuses to serialize outgoing frames that carry reserved opcodes or RSV bits.
 
 **QB Implementation:**
 *   The `qb::http::ws::opcode` enum defines constants for common opcodes (with FIN bit typically set).

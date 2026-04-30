@@ -959,6 +959,7 @@ class ws_server : public ws_internal::base<IO_> {
      * @return true when the handshake is valid.
      *
      * Enforces:
+     *   - HTTP method is `GET` (RFC §4.2.1/1);
      *   - presence of `Sec-WebSocket-Key` (RFC §4.2.1/5);
      *   - presence of `Sec-WebSocket-Version` with value `13` (MUST).
      */
@@ -966,6 +967,8 @@ class ws_server : public ws_internal::base<IO_> {
     static bool
     populate_handshake_response(HttpRequest const &request,
                                 HttpResponse      &response) {
+        if (request.method() != HTTP_GET)
+            return false;
         if (!request.upgrade)
             return false;
         if (!detail::iequal_ascii(request.header("Upgrade"), "websocket"))

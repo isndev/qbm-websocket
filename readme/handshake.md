@@ -24,6 +24,7 @@ Origin: http://example.com
 **Key Headers:**
 
 *   `Host`: Standard HTTP Host header.
+*   HTTP method: must be `GET`.
 *   `Upgrade: websocket`: Declares the desired protocol is WebSocket.
 *   `Connection: Upgrade`: Signals that this is an upgrade request.
 *   `Sec-WebSocket-Key`: A **required**, randomly generated, 16-byte nonce, Base64 encoded. The server validates both decode length (16 bytes) and canonical base64 representation.
@@ -64,7 +65,7 @@ If the server cannot or does not want to upgrade the connection, it responds wit
 
 **QB Server Implementation:**
 *   An HTTP server component (e.g., based on `qb::http::protocol_view`) receives the initial GET request.
-*   The server logic inspects the headers (`Upgrade`, `Connection`, `Sec-WebSocket-Key`, `Sec-WebSocket-Version`) with strict token/OWS validation.
+*   The server logic validates the method (`GET`) and inspects the headers (`Upgrade`, `Connection`, `Sec-WebSocket-Key`, `Sec-WebSocket-Version`) with strict token/OWS validation.
 *   If the headers are valid, the server calculates the `Sec-WebSocket-Accept` value using `qb::crypto::sha1` and `qb::crypto::base64::encode`.
 *   The server constructs an HTTP `Response` with status `101` and the required headers (`Upgrade`, `Connection`, `Sec-WebSocket-Accept`).
 *   Crucially, **before** sending the `101` response, the server typically uses `switch_protocol<qb::http::ws::protocol>(...)` to change the protocol handler for that specific connection from the HTTP handler to the WebSocket handler (`qb::http::ws::protocol`).

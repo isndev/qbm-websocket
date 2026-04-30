@@ -254,6 +254,9 @@ TEST_F(CoroNegativeTest, ServerRefusesHandshakeWithoutVersion) {
         << "server should NOT send a 101 Switching Protocols on an "
            "upgrade without Sec-WebSocket-Version; got:\n"
         << response;
+    EXPECT_NE(response.find("400"), std::string::npos)
+        << "server should deliver a BAD_REQUEST response before closing; got:\n"
+        << response;
 }
 
 // ---------------------------------------------------------------------------

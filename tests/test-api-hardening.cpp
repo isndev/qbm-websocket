@@ -669,6 +669,26 @@ TEST(WebSocketApiHardening, RejectsOversizedOutgoingPongFrame) {
     EXPECT_THROW(out << pong, std::invalid_argument);
 }
 
+TEST(WebSocketApiHardening, RejectsOutgoingReservedOpcodeAndRsvBits) {
+    qb::allocator::pipe<char> out;
+
+    qb::http::ws::Message reserved_opcode;
+    reserved_opcode.fin_rsv_opcode = 0x8Bu; // FIN + reserved control opcode.
+    EXPECT_THROW(out << reserved_opcode, std::invalid_argument);
+
+    qb::http::ws::Message rsv_text;
+    rsv_text.fin_rsv_opcode = 0xC1u; // FIN + RSV1 + RSV2 + text.
+    EXPECT_THROW(out << rsv_text, std::invalid_argument);
+}
+
+TEST(WebSocketApiHardening, RejectsOutgoingFragmentedControlFrame) {
+    qb::allocator::pipe<char> out;
+
+    qb::http::ws::Message fragmented_ping;
+    fragmented_ping.fin_rsv_opcode = qb::http::ws::opcode::_Ping; // no FIN bit
+    EXPECT_THROW(out << fragmented_ping, std::invalid_argument);
+}
+
 TEST(WebSocketApiHardening, RejectsInvalidSubprotocolTokens) {
     qb::http::ws::client client;
 

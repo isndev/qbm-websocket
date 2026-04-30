@@ -228,10 +228,25 @@ is_control_opcode(unsigned char fin_rsv_opcode) noexcept {
 
 void
 enforce_outgoing_frame_constraints(const http::ws::Message &msg) {
+    const auto opcode = static_cast<unsigned char>(
+        msg.fin_rsv_opcode & qb::protocol::ws_internal::rfc::OPCODE_MASK);
+    if ((msg.fin_rsv_opcode & qb::protocol::ws_internal::rfc::RSV_BITS_MASK) != 0u) {
+        throw std::invalid_argument(
+            "qb::http::ws: RSV bits require an extension and must be clear");
+    }
+    if (!qb::protocol::ws_internal::is_valid_frame_opcode(opcode)) {
+        throw std::invalid_argument(
+            "qb::http::ws: reserved or unknown opcode cannot be serialized");
+    }
     if (is_control_opcode(msg.fin_rsv_opcode) &&
         msg.size() > qb::protocol::ws_internal::rfc::MAX_CONTROL_FRAME_PAYLOAD_SIZE) {
         throw std::invalid_argument(
             "qb::http::ws: control frame payload exceeds 125-byte RFC 6455 limit");
+    }
+    if (is_control_opcode(msg.fin_rsv_opcode) &&
+        (msg.fin_rsv_opcode & qb::protocol::ws_internal::rfc::FIN_BIT_MASK) == 0u) {
+        throw std::invalid_argument(
+            "qb::http::ws: control frames must not be fragmented");
     }
 }
 

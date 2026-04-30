@@ -272,6 +272,21 @@ protected:
     void SetUp() override { qb::io::async::init(); }
 };
 
+std::string
+read_http_response(qb::io::tcp::socket &sock) {
+    std::string response;
+    for (int i = 0; i < 500 && response.find("\r\n\r\n") == std::string::npos; ++i) {
+        char buf[512];
+        int  n = sock.read(buf, sizeof(buf));
+        if (n > 0) {
+            response.append(buf, static_cast<std::size_t>(n));
+        } else {
+            std::this_thread::sleep_for(5ms);
+        }
+    }
+    return response;
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -386,6 +401,30 @@ TEST_F(CoroServerTest, CoroHandshakeHookRejectsUpgrade) {
     };
 
     EXPECT_FALSE(qb::http::ws::run_sync(scenario()));
+}
+
+TEST_F(CoroServerTest, CoroHandshakeHookRejectsWithHttpResponse) {
+    ServerThread<RejectingCoroServer> server{19946};
+
+    qb::io::tcp::socket sock;
+    ASSERT_EQ(sock.connect(qb::io::uri{"tcp://localhost:19946"}), 0);
+    (void) sock.set_nonblocking(true);
+
+    const std::string request =
+        "GET /ws HTTP/1.1\r\n"
+        "Host: localhost:19946\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "\r\n";
+    sock.write(request.data(), static_cast<int>(request.size()));
+
+    const auto response = read_http_response(sock);
+    EXPECT_NE(response.find("403"), std::string::npos) << response;
+    EXPECT_NE(response.find("not allowed"), std::string::npos) << response;
+    EXPECT_EQ(response.find("101"), std::string::npos) << response;
+    sock.close();
 }
 
 TEST_F(CoroServerTest, CoroSessionClosesGracefully) {

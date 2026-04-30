@@ -7,7 +7,8 @@ This guide provides practical examples on how to use the `qbm-websocket` module 
 - Client API (`qb::http::ws::WebSocket<T>` and `qb::http::ws::client`) masks outgoing frames automatically; avoid forcing masking manually unless you are building raw frames.
 - Server-side outgoing frames are unmasked by default.
 - Parser side is strict RFC 6455: invalid opcodes, RSV misuse, invalid close payload/code, invalid UTF-8, and malformed length encodings are rejected.
-- Control frames (`Ping`, `Pong`, `Close`) are capped to 125-byte payload; oversized outgoing control frames throw `std::invalid_argument`.
+- Serialization is also strict: outgoing frames with RSV bits, reserved opcodes, fragmented control frames, or oversized control payloads throw `std::invalid_argument`.
+- Server handshakes require an HTTP `GET` upgrade request with valid `Upgrade`, `Connection`, `Sec-WebSocket-Key`, and `Sec-WebSocket-Version: 13`.
 
 ## 1. Building a WebSocket Server
 
@@ -86,27 +87,21 @@ public:
     void on(http_protocol::request&& event) {
         std::cout << _client_id << " received HTTP request for: " << event.http.uri().path() << std::endl;
 
-        // Basic check for WebSocket upgrade headers
-        if (event.http.upgrade && event.http.header("Upgrade") == "websocket") {
-            std::cout << _client_id << " attempting WebSocket upgrade..." << std::endl;
-            // switch_protocol handles key calculation, 101 response, and protocol switch
-            if (this->switch_protocol<ws_protocol>(*this, event.http)) {
-                std::cout << _client_id << " WebSocket upgrade successful." << std::endl;
-                // Optionally send a welcome message
-                qb::http::ws::MessageText welcome;
-                welcome.masked = false; // Server->Client MUST NOT be masked
-                welcome << "Welcome " << _client_id;
-                *this << welcome;
-            } else {
-                std::cerr << _client_id << " WebSocket upgrade failed!" << std::endl;
-                disconnect();
-            }
+        std::cout << _client_id << " attempting WebSocket upgrade..." << std::endl;
+        // switch_protocol validates the RFC 6455 GET upgrade, computes
+        // Sec-WebSocket-Accept, queues the 101 response, and installs WS.
+        if (this->switch_protocol<ws_protocol>(*this, event.http)) {
+            std::cout << _client_id << " WebSocket upgrade successful." << std::endl;
+            // Optionally send a welcome message
+            qb::http::ws::MessageText welcome;
+            welcome.masked = false; // Server->Client MUST NOT be masked
+            welcome << "Welcome " << _client_id;
+            *this << welcome;
         } else {
-            std::cout << _client_id << " received non-WebSocket request." << std::endl;
-            // Handle as a normal HTTP request or send error
+            std::cerr << _client_id << " WebSocket upgrade failed!" << std::endl;
             qb::http::Response res(qb::http::status::BAD_REQUEST, "Expected WebSocket Upgrade");
             *this << res;
-            disconnect();
+            close_after_deliver();
         }
     }
 
@@ -151,7 +146,7 @@ public:
 // int main() {
 //     qb::io::async::init();
 //     DetailedServer server;
-//     if (!server.start(9997)) return 1;
+//     if (!server.start(20197)) return 1;
 //     qb::io::async::run(); // Run event loop
 //     return 0;
 // }
@@ -264,7 +259,7 @@ public:
 // int main() {
 //     qb::io::async::init();
 //     DetailedClient client;
-//     client.connect("ws://localhost:9997");
+//     client.connect("ws://localhost:20197");
 //     qb::io::async::run(); // Run event loop
 //     return 0;
 // }
